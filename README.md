@@ -1,7 +1,8 @@
 # signal-bot-orx
 
 `signal-bot-orx` is a webhook-driven Signal bot powered by
-`signal-cli-rest-api` and OpenRouter.
+`signal-cli-rest-api` and OpenRouter. 
+Ideally for groupchats;  supports either.
 
 Primary behavior:
 - Mention-triggered group chat replies.
@@ -13,15 +14,14 @@ Primary behavior:
 - Handles incoming Signal webhooks (`POST /webhook/signal`).
 - Enforces number/group allowlists unless auth bypass is explicitly enabled.
 - Supports metadata mention detection with alias fallback.
-- Maintains short-lived in-memory conversation history per group.
+- Maintains and supports customizable in-memory conversation history per group.
 - Deduplicates repeated webhook deliveries.
-- Sends images via OpenRouter image-capable chat completions when configured.
+- Supports image generation  via OpenRouter when configured.
 
 ## Requirements
 
-- Python 3.14+
 - [`uv`](https://docs.astral.sh/uv/)
-- Running [`signal-cli-rest-api`](https://github.com/bbernhard/signal-cli-rest-api/tree/master/doc)
+- Running [`signal-cli-rest-api`](https://github.com/bbernhard/signal-cli-rest-api/)
 - OpenRouter API key for chat
 
 ## Installation
