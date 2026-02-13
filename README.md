@@ -5,6 +5,7 @@
 
 Primary behavior:
 - Mention-triggered group chat replies.
+- Direct-message chat replies without mention syntax.
 - Optional `/imagine <prompt>` image generation.
 
 ## Features
@@ -120,6 +121,12 @@ Group chat:
 
 ```text
 @bot summarize the key decisions from this thread
+```
+
+Direct message chat:
+
+```text
+summarize the key decisions from this thread
 ```
 
 Optional image mode:

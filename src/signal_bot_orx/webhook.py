@@ -86,7 +86,7 @@ class WebhookHandler:
             background_tasks.add_task(
                 self._safe_send_text,
                 parsed,
-                "Tag me with a prompt, for example: @bot summarize today's discussion.",
+                _chat_usage_message(parsed),
                 reply_target,
             )
             return {"status": "accepted", "reason": "chat_usage_sent"}
@@ -282,7 +282,7 @@ def parse_imagine_prompt(text: str) -> str | None:
 
 def should_handle_chat_mention(message: IncomingMessage, settings: Settings) -> bool:
     if message.target.group_id is None:
-        return False
+        return True
 
     if metadata_mentions_bot(
         message,
@@ -348,6 +348,12 @@ def conversation_key_for_message(message: IncomingMessage) -> str:
     if message.target.group_id is not None:
         return f"group:{message.target.group_id}"
     return f"dm:{message.sender}"
+
+
+def _chat_usage_message(message: IncomingMessage) -> str:
+    if message.target.group_id is None:
+        return "Send a prompt, for example: summarize today's discussion."
+    return "Tag me with a prompt, for example: @bot summarize today's discussion."
 
 
 def _truncate_reply(text: str) -> str:

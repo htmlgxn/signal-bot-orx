@@ -71,6 +71,12 @@ Mention-triggered group reply:
 @bot summarize the last messages
 ```
 
+Direct-message chat (no mention required):
+
+```text
+summarize the last messages
+```
+
 Optional image generation:
 
 ```text

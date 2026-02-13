@@ -169,7 +169,7 @@ def test_resolve_reply_target_dm_message_unchanged() -> None:
     assert target == message.target
 
 
-def test_should_handle_chat_mention_false_for_non_group() -> None:
+def test_should_handle_chat_mention_true_for_dm() -> None:
     message = IncomingMessage(
         sender="+15550002222",
         text="@bot hi",
@@ -177,7 +177,7 @@ def test_should_handle_chat_mention_false_for_non_group() -> None:
         target=Target(recipient="+15550002222", group_id=None),
     )
 
-    assert should_handle_chat_mention(message, _settings(mode="group")) is False
+    assert should_handle_chat_mention(message, _settings(mode="group")) is True
 
 
 def test_should_handle_chat_mention_true_for_alias_fallback() -> None:
@@ -380,6 +380,76 @@ async def test_handle_webhook_alias_mention_triggers_chat_reply() -> None:
     assert fake_openrouter.seen_messages
     assert fake_openrouter.seen_messages[0][0]["content"] == "custom system prompt"
     assert fake_context.appended
+
+
+@pytest.mark.anyio
+async def test_handle_webhook_dm_without_mention_triggers_chat_reply() -> None:
+    payload = {
+        "envelope": {
+            "sourceNumber": "+15550002222",
+            "timestamp": 1730000000001,
+            "dataMessage": {
+                "message": "what is the summary?",
+                "timestamp": 1730000000001,
+            },
+        }
+    }
+
+    fake_signal = _FakeSignalClient()
+    fake_context = _FakeChatContextStore()
+    fake_openrouter = _FakeOpenRouterClient()
+    handler = WebhookHandler(
+        settings=_settings(mode="group", system_prompt="custom system prompt"),
+        signal_client=cast(Any, fake_signal),
+        openrouter_client=cast(Any, fake_openrouter),
+        chat_context=cast(Any, fake_context),
+        openrouter_image_client=None,
+        dedupe=DedupeCache(ttl_seconds=60),
+    )
+
+    background_tasks = BackgroundTasks()
+    response = await handler.handle_webhook(payload, background_tasks)
+    await _run_background_tasks(background_tasks)
+
+    assert response == {"status": "accepted", "reason": "chat_queued"}
+    assert fake_signal.text_messages == ["chat-response"]
+    assert fake_signal.text_fallback_recipients == [None]
+    assert fake_openrouter.seen_messages
+    assert fake_openrouter.seen_messages[0][0]["content"] == "custom system prompt"
+    assert fake_context.appended
+
+
+@pytest.mark.anyio
+async def test_handle_webhook_empty_dm_prompt_sends_usage() -> None:
+    payload = {
+        "envelope": {
+            "sourceNumber": "+15550002222",
+            "timestamp": 1730000000001,
+            "dataMessage": {
+                "message": "@bot",
+                "timestamp": 1730000000001,
+            },
+        }
+    }
+
+    fake_signal = _FakeSignalClient()
+    handler = WebhookHandler(
+        settings=_settings(mode="group"),
+        signal_client=cast(Any, fake_signal),
+        openrouter_client=cast(Any, _FakeOpenRouterClient()),
+        chat_context=cast(Any, _FakeChatContextStore()),
+        openrouter_image_client=None,
+        dedupe=DedupeCache(ttl_seconds=60),
+    )
+
+    background_tasks = BackgroundTasks()
+    response = await handler.handle_webhook(payload, background_tasks)
+    await _run_background_tasks(background_tasks)
+
+    assert response == {"status": "accepted", "reason": "chat_usage_sent"}
+    assert fake_signal.text_messages == [
+        "Send a prompt, for example: summarize today's discussion."
+    ]
 
 
 @pytest.mark.anyio
