@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from itertools import pairwise
 
-from signal_box_orx.chat_context import ChatTurn
+from signal_bot_orx.chat_context import ChatTurn
 
 DEFAULT_CHAT_SYSTEM_PROMPT = """You are \"@sigbot\", a core member of a group chat of friends from Canada.
 

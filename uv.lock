@@ -256,7 +256,7 @@ wheels = [
 ]
 
 [[package]]
-name = "signal-box-orx"
+name = "signal-bot-orx"
 version = "2026.2.13"
 source = { editable = "." }
 dependencies = [

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from signal_box_orx.chat_context import ChatTurn
-from signal_box_orx.chat_prompt import build_chat_messages, coerce_plain_text_reply
+from signal_bot_orx.chat_context import ChatTurn
+from signal_bot_orx.chat_prompt import build_chat_messages, coerce_plain_text_reply
 
 
 def test_build_chat_messages_includes_system_prompt_and_history() -> None:

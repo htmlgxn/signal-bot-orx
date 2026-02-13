@@ -7,12 +7,12 @@ import httpx
 import uvicorn
 from fastapi import FastAPI
 
-from signal_box_orx.chat_context import ChatContextStore
-from signal_box_orx.config import Settings
-from signal_box_orx.dedupe import DedupeCache
-from signal_box_orx.openrouter_client import OpenRouterClient, OpenRouterImageClient
-from signal_box_orx.signal_client import SignalClient
-from signal_box_orx.webhook import WebhookHandler, build_router
+from signal_bot_orx.chat_context import ChatContextStore
+from signal_bot_orx.config import Settings
+from signal_bot_orx.dedupe import DedupeCache
+from signal_bot_orx.openrouter_client import OpenRouterClient, OpenRouterImageClient
+from signal_bot_orx.signal_client import SignalClient
+from signal_bot_orx.webhook import WebhookHandler, build_router
 
 
 def create_app(settings: Settings) -> FastAPI:
@@ -23,7 +23,7 @@ def create_app(settings: Settings) -> FastAPI:
         yield
         await http_client.aclose()
 
-    app = FastAPI(title="signal-box-orx", version="2.0", lifespan=lifespan)
+    app = FastAPI(title="signal-bot-orx", version="2.0", lifespan=lifespan)
 
     signal_client = SignalClient(
         base_url=settings.signal_api_base_url,

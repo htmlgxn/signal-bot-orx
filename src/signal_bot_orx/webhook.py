@@ -5,18 +5,18 @@ import re
 
 from fastapi import APIRouter, BackgroundTasks
 
-from signal_box_orx.chat_context import ChatContextStore
-from signal_box_orx.chat_prompt import build_chat_messages, coerce_plain_text_reply
-from signal_box_orx.config import Settings
-from signal_box_orx.dedupe import DedupeCache
-from signal_box_orx.openrouter_client import (
+from signal_bot_orx.chat_context import ChatContextStore
+from signal_bot_orx.chat_prompt import build_chat_messages, coerce_plain_text_reply
+from signal_bot_orx.config import Settings
+from signal_bot_orx.dedupe import DedupeCache
+from signal_bot_orx.openrouter_client import (
     ChatReplyError,
     ImageGenerationError,
     OpenRouterClient,
     OpenRouterImageClient,
 )
-from signal_box_orx.signal_client import SignalClient, SignalSendError
-from signal_box_orx.types import (
+from signal_bot_orx.signal_client import SignalClient, SignalSendError
+from signal_bot_orx.types import (
     IncomingMessage,
     Target,
     dedupe_key,

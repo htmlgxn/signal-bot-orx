@@ -1,6 +1,6 @@
-# signal-box-orx Setup Guide
+# signal-bot-orx Setup Guide
 
-This guide is for running `signal-box-orx` as a webhook service.
+This guide is for running `signal-bot-orx` as a webhook service.
 
 ## 1. Prerequisites
 
@@ -11,8 +11,8 @@ This guide is for running `signal-box-orx` as a webhook service.
 ## 2. Clone and install
 
 ```bash
-git clone https://github.com/htmlgxn/signal-box-orx.git
-cd signal-box-orx
+git clone https://github.com/htmlgxn/signal-bot-orx.git
+cd signal-bot-orx
 uv sync --dev
 ```
 
@@ -44,7 +44,7 @@ OPENROUTER_IMAGE_MODEL=openai/gpt-image-1
 set -a
 source .env
 set +a
-uv run signal-box-orx
+uv run signal-bot-orx
 ```
 
 Health check:

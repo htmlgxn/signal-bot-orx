@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from signal_box_orx.config import Settings
-from signal_box_orx.types import IncomingMessage, Target
-from signal_box_orx.webhook import is_authorized_message
+from signal_bot_orx.config import Settings
+from signal_bot_orx.types import IncomingMessage, Target
+from signal_bot_orx.webhook import is_authorized_message
 
 
 def _settings(

@@ -7,8 +7,8 @@ from typing import Protocol
 
 import httpx
 
-from signal_box_orx.group_resolver import GroupResolver, ResolvedGroupRecipients
-from signal_box_orx.types import Target
+from signal_bot_orx.group_resolver import GroupResolver, ResolvedGroupRecipients
+from signal_bot_orx.types import Target
 
 logger = logging.getLogger(__name__)
 

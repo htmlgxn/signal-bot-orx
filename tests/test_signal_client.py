@@ -6,13 +6,13 @@ from typing import cast
 import httpx
 import pytest
 
-from signal_box_orx.group_resolver import ResolvedGroupRecipients
-from signal_box_orx.signal_client import (
+from signal_bot_orx.group_resolver import ResolvedGroupRecipients
+from signal_bot_orx.signal_client import (
     GroupResolverLike,
     SignalClient,
     SignalSendError,
 )
-from signal_box_orx.types import Target
+from signal_bot_orx.types import Target
 
 
 class StaticGroupResolver:

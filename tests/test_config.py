@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from signal_box_orx.chat_prompt import DEFAULT_CHAT_SYSTEM_PROMPT
-from signal_box_orx.config import (
+from signal_bot_orx.chat_prompt import DEFAULT_CHAT_SYSTEM_PROMPT
+from signal_bot_orx.config import (
     DEFAULT_MENTION_ALIASES,
     DEFAULT_OPENROUTER_MODEL,
     Settings,
@@ -127,12 +127,12 @@ def test_settings_loads_openrouter_optional_metadata(
 ) -> None:
     _set_base_required(monkeypatch)
     monkeypatch.setenv("OPENROUTER_HTTP_REFERER", "https://example.com")
-    monkeypatch.setenv("OPENROUTER_APP_TITLE", "signal-box-orx")
+    monkeypatch.setenv("OPENROUTER_APP_TITLE", "signal-bot-orx")
 
     settings = Settings.from_env()
 
     assert settings.openrouter_http_referer == "https://example.com"
-    assert settings.openrouter_app_title == "signal-box-orx"
+    assert settings.openrouter_app_title == "signal-bot-orx"
 
 
 def test_settings_openrouter_image_is_optional(monkeypatch: pytest.MonkeyPatch) -> None:

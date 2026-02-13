@@ -8,18 +8,18 @@ import httpx
 import pytest
 from fastapi import BackgroundTasks
 
-from signal_box_orx.chat_context import ChatTurn
-from signal_box_orx.config import Settings
-from signal_box_orx.dedupe import DedupeCache
-from signal_box_orx.group_resolver import ResolvedGroupRecipients
-from signal_box_orx.signal_client import GroupResolverLike, SignalClient
-from signal_box_orx.types import (
+from signal_bot_orx.chat_context import ChatTurn
+from signal_bot_orx.config import Settings
+from signal_bot_orx.dedupe import DedupeCache
+from signal_bot_orx.group_resolver import ResolvedGroupRecipients
+from signal_bot_orx.signal_client import GroupResolverLike, SignalClient
+from signal_bot_orx.types import (
     IncomingMessage,
     MentionSpan,
     Target,
     parse_signal_webhook,
 )
-from signal_box_orx.webhook import (
+from signal_bot_orx.webhook import (
     WebhookHandler,
     normalize_chat_prompt,
     parse_imagine_prompt,
@@ -578,7 +578,7 @@ async def test_process_imagine_reuses_single_resolved_reply_target(
         resolve_calls += 1
         return resolve_reply_target(message, settings)
 
-    monkeypatch.setattr("signal_box_orx.webhook.resolve_reply_target", _resolve_once)
+    monkeypatch.setattr("signal_bot_orx.webhook.resolve_reply_target", _resolve_once)
 
     message = IncomingMessage(
         sender="+15550002222",

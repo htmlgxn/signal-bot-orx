@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from signal_box_orx.dedupe import DedupeCache
+from signal_bot_orx.dedupe import DedupeCache
 
 
 def test_dedupe_accepts_first_and_rejects_duplicate() -> None:

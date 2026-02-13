@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from signal_box_orx.parsing import as_dict, first_non_empty_str
+from signal_bot_orx.parsing import as_dict, first_non_empty_str
 
 
 @dataclass(frozen=True)

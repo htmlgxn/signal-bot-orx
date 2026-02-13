@@ -1,6 +1,6 @@
-# signal-box-orx
+# signal-bot-orx
 
-`signal-box-orx` is a webhook-driven Signal bot powered by
+`signal-bot-orx` is a webhook-driven Signal bot powered by
 `signal-cli-rest-api` and OpenRouter.
 
 Primary behavior:
@@ -34,13 +34,13 @@ uv sync --dev
 From package index (after publish):
 
 ```bash
-uv tool install signal-box-orx
+uv tool install signal-bot-orx
 ```
 
 or
 
 ```bash
-pip install signal-box-orx
+pip install signal-bot-orx
 ```
 
 ## Configuration
@@ -84,7 +84,7 @@ Webhook/runtime options:
 ## Run
 
 ```bash
-uv run signal-box-orx
+uv run signal-bot-orx
 ```
 
 Endpoints:

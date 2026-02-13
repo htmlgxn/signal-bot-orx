@@ -1,5 +1,5 @@
 [project]
-name = "signal-box-orx"
+name = "signal-bot-orx"
 version = "2026.2.13"
 description = "Webhook-driven Signal bot with mention-triggered OpenRouter chat replies and optional image generation mode."
 readme = "README.md"
@@ -29,12 +29,12 @@ dependencies = [
 ]
 
 [project.scripts]
-signal-box-orx = "signal_box_orx.main:main"
+signal-bot-orx = "signal_bot_orx.main:main"
 
 [project.urls]
-Homepage = "https://github.com/htmlgxn/signal-box-orx"
-Repository = "https://github.com/htmlgxn/signal-box-orx"
-Issues = "https://github.com/htmlgxn/signal-box-orx/issues"
+Homepage = "https://github.com/htmlgxn/signal-bot-orx"
+Repository = "https://github.com/htmlgxn/signal-bot-orx"
+Issues = "https://github.com/htmlgxn/signal-bot-orx/issues"
 
 [dependency-groups]
 dev = [

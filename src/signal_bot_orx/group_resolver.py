@@ -8,7 +8,7 @@ from urllib.parse import quote
 
 import httpx
 
-from signal_box_orx.parsing import first_non_empty_str
+from signal_bot_orx.parsing import first_non_empty_str
 
 
 @dataclass(frozen=True)

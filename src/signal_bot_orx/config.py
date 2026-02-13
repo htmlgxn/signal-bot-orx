@@ -4,7 +4,7 @@ import os
 from dataclasses import dataclass
 from typing import Literal
 
-from signal_box_orx.chat_prompt import DEFAULT_CHAT_SYSTEM_PROMPT
+from signal_bot_orx.chat_prompt import DEFAULT_CHAT_SYSTEM_PROMPT
 
 GroupReplyMode = Literal["group", "dm_fallback"]
 

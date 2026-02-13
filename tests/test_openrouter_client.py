@@ -6,7 +6,7 @@ import json
 import httpx
 import pytest
 
-from signal_box_orx.openrouter_client import (
+from signal_bot_orx.openrouter_client import (
     ChatReplyError,
     ImageGenerationError,
     OpenRouterClient,

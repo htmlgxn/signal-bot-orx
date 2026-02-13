@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from signal_box_orx.chat_context import ChatContextStore
+from signal_bot_orx.chat_context import ChatContextStore
 
 
 def test_chat_context_trims_to_max_turns() -> None:
@@ -24,7 +24,7 @@ def test_chat_context_expires_by_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_monotonic() -> float:
         return now
 
-    monkeypatch.setattr("signal_box_orx.chat_context.time.monotonic", fake_monotonic)
+    monkeypatch.setattr("signal_bot_orx.chat_context.time.monotonic", fake_monotonic)
 
     store = ChatContextStore(max_turns=2, ttl_seconds=10)
     store.append_turn("group:1", user_text="u1", assistant_text="a1")

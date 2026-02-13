@@ -3,7 +3,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from signal_box_orx.group_resolver import GroupResolver
+from signal_bot_orx.group_resolver import GroupResolver
 
 
 @pytest.mark.anyio
