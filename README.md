@@ -47,6 +47,10 @@ pip install signal-bot-orx
 
 Create `.env` from `.env.example` and set required values.
 
+```bash
+cp .env.example .env
+```
+
 Required:
 - `SIGNAL_API_BASE_URL`
 - `SIGNAL_SENDER_NUMBER`
@@ -79,9 +83,21 @@ Webhook/runtime options:
 - `BOT_WEBHOOK_HOST` (default: `127.0.0.1`)
 - `BOT_WEBHOOK_PORT` (default: `8001`)
 
-**NOTE: You can pass in the same API key in both CHAT_API_KEY AND IMAGE_API_KEY if you don't mind the same settings / limits for both text and images**
+**NOTE:** You can use the same key for both `OPENROUTER_CHAT_API_KEY` and
+`OPENROUTER_IMAGE_API_KEY` if you are okay sharing limits/settings across chat
+and image calls.
 
 ## Run
+
+Load environment variables before starting the bot:
+
+```bash
+set -a
+source .env
+set +a
+```
+
+Then start the service:
 
 ```bash
 uv run signal-bot-orx
@@ -90,6 +106,9 @@ uv run signal-bot-orx
 Endpoints:
 - `GET /healthz`
 - `POST /webhook/signal`
+
+If you skip exporting `.env`, startup will fail with missing required
+environment variable errors.
 
 Configure `signal-cli-rest-api` callback target:
 
