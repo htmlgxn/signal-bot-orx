@@ -1,0 +1,43 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+*.so
+*.dll
+.Python
+build/
+dist/
+.venv/
+.env
+.python-version
+
+# ===== Testing =====
+.*_cache/
+coverage.xml
+.htmlcov/
+.tox/
+
+# ===== IDE/Editor =====
+.idea/
+.vscode/
+.obsidian
+.DS_Store
+*.swp
+*.swo
+*.swn
+*.swo
+*.bak
+*.tmp
+
+# ===== Build/Generated =====
+resources/
+.tmp/
+*.sanitized.*
+sanitize_pyproject.py
+
+# ===== Local-Only Docs =====
+AGENTS.md
+LICENSE.md
