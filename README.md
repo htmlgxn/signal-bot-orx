@@ -20,7 +20,7 @@ Primary behavior:
 ## Requirements
 
 - [`uv`](https://docs.astral.sh/uv/)
-- Running [`signal-cli-rest-api`](https://github.com/bbernhard/signal-cli-rest-api/tree/master/doc)
+- Running [`signal-cli-rest-api`](https://github.com/bbernhard/signal-cli-rest-api/)
 - OpenRouter API key for chat
 
 ## Installation
