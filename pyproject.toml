@@ -1,7 +1,7 @@
 [project]
 name = "signal-box-orx"
 version = "2026.2.13"
-description = "Webhook-driven Signal bot with mention-triggered OpenRouter chat replies and optional /imagine image generation."
+description = "Webhook-driven Signal bot with mention-triggered OpenRouter chat replies and optional image generation mode."
 readme = "README.md"
 requires-python = ">=3.14"
 license = "MIT"

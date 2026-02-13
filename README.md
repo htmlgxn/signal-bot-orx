@@ -79,6 +79,8 @@ Webhook/runtime options:
 - `BOT_WEBHOOK_HOST` (default: `127.0.0.1`)
 - `BOT_WEBHOOK_PORT` (default: `8001`)
 
+**NOTE: You can pass in the same API key in both CHAT_API_KEY AND IMAGE_API_KEY if you don't mind the same settings / limits for both text and images**
+
 ## Run
 
 ```bash
