@@ -52,6 +52,7 @@ BOT_SEARCH_PERSONA_ENABLED=false
 BOT_SEARCH_USE_HISTORY_FOR_SUMMARY=false
 BOT_SEARCH_REGION=us-en
 BOT_SEARCH_SAFESEARCH=moderate
+BOT_SEARCH_BACKEND_STRATEGY=first_non_empty
 BOT_SEARCH_BACKEND_SEARCH_ORDER=duckduckgo,bing,google,yandex,grokipedia
 BOT_SEARCH_BACKEND_NEWS_ORDER=duckduckgo,bing,yahoo
 BOT_SEARCH_BACKEND_SEARCH=auto
@@ -72,6 +73,8 @@ Notes:
 - In `context` mode, ambiguous follow-ups can trigger `Who are you referring to?`; a short next reply can be used to continue the pending search intent.
 - Toggle any explicit DDGS command with `BOT_SEARCH_MODE_*_ENABLED`.
 - `BOT_SEARCH_DEBUG_LOGGING=true` logs router/summarizer decision metadata (without raw message text/results) for diagnostics.
+- `BOT_SEARCH_BACKEND_STRATEGY=first_non_empty` stops at first backend with results.
+- `BOT_SEARCH_BACKEND_STRATEGY=aggregate` queries all configured backends, merges/de-dupes by URL, and caps final output to `BOT_SEARCH_TEXT_MAX_RESULTS` / `BOT_SEARCH_NEWS_MAX_RESULTS`.
 - `BOT_SEARCH_BACKEND_*_ORDER` defines fallback chains for general `search` and `news`.
 - If an order var is set, it overrides the legacy single-backend var for that mode.
 - `/wiki` stays explicit encyclopedia mode via `BOT_SEARCH_BACKEND_WIKI`.

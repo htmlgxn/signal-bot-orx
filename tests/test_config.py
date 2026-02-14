@@ -49,6 +49,7 @@ def clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "BOT_SEARCH_USE_HISTORY_FOR_SUMMARY",
         "BOT_SEARCH_REGION",
         "BOT_SEARCH_SAFESEARCH",
+        "BOT_SEARCH_BACKEND_STRATEGY",
         "BOT_SEARCH_BACKEND_SEARCH",
         "BOT_SEARCH_BACKEND_NEWS",
         "BOT_SEARCH_BACKEND_SEARCH_ORDER",
@@ -328,6 +329,7 @@ def test_settings_search_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.bot_search_use_history_for_summary is False
     assert settings.bot_search_region == "us-en"
     assert settings.bot_search_safesearch == "moderate"
+    assert settings.bot_search_backend_strategy == "first_non_empty"
     assert settings.bot_search_backend_search == "auto"
     assert settings.bot_search_backend_news == "auto"
     assert settings.bot_search_backend_search_order == (
@@ -361,6 +363,7 @@ def test_settings_search_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BOT_SEARCH_USE_HISTORY_FOR_SUMMARY", "true")
     monkeypatch.setenv("BOT_SEARCH_REGION", "ca-en")
     monkeypatch.setenv("BOT_SEARCH_SAFESEARCH", "off")
+    monkeypatch.setenv("BOT_SEARCH_BACKEND_STRATEGY", "aggregate")
     monkeypatch.setenv("BOT_SEARCH_BACKEND_SEARCH", "google")
     monkeypatch.setenv("BOT_SEARCH_BACKEND_NEWS", "yahoo")
     monkeypatch.setenv(
@@ -390,6 +393,7 @@ def test_settings_search_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.bot_search_use_history_for_summary is True
     assert settings.bot_search_region == "ca-en"
     assert settings.bot_search_safesearch == "off"
+    assert settings.bot_search_backend_strategy == "aggregate"
     assert settings.bot_search_backend_search == "google"
     assert settings.bot_search_backend_news == "yahoo"
     assert settings.bot_search_backend_search_order == (
@@ -430,6 +434,18 @@ def test_settings_search_context_mode_invalid(
         Settings.from_env()
 
     assert "Invalid BOT_SEARCH_CONTEXT_MODE" in str(exc.value)
+
+
+def test_settings_search_backend_strategy_invalid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_base_required(monkeypatch)
+    monkeypatch.setenv("BOT_SEARCH_BACKEND_STRATEGY", "fanout")
+
+    with pytest.raises(RuntimeError) as exc:
+        Settings.from_env()
+
+    assert "Invalid BOT_SEARCH_BACKEND_STRATEGY" in str(exc.value)
 
 
 def test_settings_search_backend_order_uses_legacy_single_backend_when_no_order(

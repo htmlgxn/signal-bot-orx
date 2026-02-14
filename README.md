@@ -91,6 +91,7 @@ Search options:
 - `BOT_SEARCH_USE_HISTORY_FOR_SUMMARY` (default: `false`, include last 2 turns in search summary prompt)
 - `BOT_SEARCH_REGION` (default: `us-en`)
 - `BOT_SEARCH_SAFESEARCH` (`on|moderate|off`, default: `moderate`)
+- `BOT_SEARCH_BACKEND_STRATEGY` (`first_non_empty|aggregate`, default: `first_non_empty`)
 - `BOT_SEARCH_BACKEND_SEARCH_ORDER` (default: `duckduckgo,bing,google,yandex,grokipedia`)
 - `BOT_SEARCH_BACKEND_NEWS_ORDER` (default: `duckduckgo,bing,yahoo`)
 - `BOT_SEARCH_BACKEND_SEARCH` (default: `auto`, backend for `/search` + auto mode `search`)
@@ -110,6 +111,8 @@ Default search privacy behavior:
 - In `context` mode, ambiguous follow-ups (for example, pronoun-only references) may trigger `Who are you referring to?`; a short next reply can be applied to continue the pending query.
 - You can disable any explicit DDGS command with its corresponding `BOT_SEARCH_MODE_*_ENABLED=false` flag.
 - Set `BOT_SEARCH_DEBUG_LOGGING=true` to inspect auto-search decisions (`should_search`, `mode`, query length, path) during debugging.
+- `BOT_SEARCH_BACKEND_STRATEGY=first_non_empty` stops at first backend with results.
+- `BOT_SEARCH_BACKEND_STRATEGY=aggregate` queries all backends in order, merges/de-dupes by URL, then caps final output to `BOT_SEARCH_TEXT_MAX_RESULTS` / `BOT_SEARCH_NEWS_MAX_RESULTS`.
 - `BOT_SEARCH_BACKEND_*_ORDER` defines fallback chains for general `search` and `news`.
 - If an order var is set, it takes precedence over legacy single-backend vars.
 - `/wiki` remains explicit encyclopedia mode and uses `BOT_SEARCH_BACKEND_WIKI`.

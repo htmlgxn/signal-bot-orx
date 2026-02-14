@@ -8,6 +8,7 @@ from signal_bot_orx.chat_prompt import DEFAULT_CHAT_SYSTEM_PROMPT
 
 GroupReplyMode = Literal["group", "dm_fallback"]
 SearchContextMode = Literal["no_context", "context"]
+SearchBackendStrategy = Literal["first_non_empty", "aggregate"]
 
 _SEARCH_ALLOWED_BACKENDS = frozenset(
     {
@@ -69,6 +70,7 @@ class Settings:
     bot_search_safesearch: Literal["on", "moderate", "off"] = "moderate"
     bot_search_backend_search: str = "auto"
     bot_search_backend_news: str = "auto"
+    bot_search_backend_strategy: SearchBackendStrategy = "first_non_empty"
     bot_search_backend_search_order: tuple[str, ...] = (
         "duckduckgo",
         "bing",
@@ -230,6 +232,9 @@ class Settings:
             bot_search_safesearch=_parse_safesearch(os.getenv("BOT_SEARCH_SAFESEARCH")),
             bot_search_backend_search=backend_search_env,
             bot_search_backend_news=backend_news_env,
+            bot_search_backend_strategy=_parse_search_backend_strategy(
+                os.getenv("BOT_SEARCH_BACKEND_STRATEGY")
+            ),
             bot_search_backend_search_order=(
                 backend_search_order
                 if backend_search_order is not None
@@ -350,6 +355,22 @@ def _parse_search_context_mode(value: str | None) -> SearchContextMode:
 
     raise RuntimeError(
         "Invalid BOT_SEARCH_CONTEXT_MODE. Expected 'no_context' or 'context'."
+    )
+
+
+def _parse_search_backend_strategy(value: str | None) -> SearchBackendStrategy:
+    if value is None:
+        return "first_non_empty"
+
+    normalized = value.strip().lower()
+    if normalized == "first_non_empty":
+        return "first_non_empty"
+    if normalized == "aggregate":
+        return "aggregate"
+
+    raise RuntimeError(
+        "Invalid BOT_SEARCH_BACKEND_STRATEGY. Expected 'first_non_empty' or "
+        "'aggregate'."
     )
 
 

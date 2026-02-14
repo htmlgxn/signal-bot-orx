@@ -63,22 +63,33 @@ class SearchClient:
     ) -> list[SearchResult]:
         timeout = max(1, round(settings.bot_search_timeout_seconds))
         with DDGS(timeout=timeout) as ddgs:
-            raw_results: list[dict[str, object]]
             if mode == "search":
-                raw_results = _search_text_with_fallback(
+                normalized = _search_mode_with_backends(
                     ddgs=ddgs,
                     query=query,
                     settings=settings,
+                    mode="search",
                     backends=settings.bot_search_backend_search_order,
+                    max_results=settings.bot_search_text_max_results,
+                    strategy=settings.bot_search_backend_strategy,
                 )
-            elif mode == "news":
-                raw_results = _search_news_with_fallback(
+                if not normalized:
+                    raise SearchError("No search results found.")
+                return normalized
+            if mode == "news":
+                normalized = _search_mode_with_backends(
                     ddgs=ddgs,
                     query=query,
                     settings=settings,
+                    mode="news",
                     backends=settings.bot_search_backend_news_order,
+                    max_results=settings.bot_search_news_max_results,
+                    strategy=settings.bot_search_backend_strategy,
                 )
-            elif mode == "wiki":
+                if not normalized:
+                    raise SearchError("No search results found.")
+                return normalized
+            if mode == "wiki":
                 raw_results = ddgs.text(
                     query,
                     region=settings.bot_search_region,
@@ -95,17 +106,23 @@ class SearchClient:
                     backend=settings.bot_search_backend_images,
                 )
 
-        normalized = [
-            _normalize_result(mode=mode, result=item)
-            for item in raw_results
-            if isinstance(item, dict)
-        ]
-        normalized = [item for item in normalized if item is not None]
+        normalized = _normalize_search_results(mode=mode, raw_results=raw_results)
 
         if not normalized:
             raise SearchError("No search results found.")
 
         return normalized
+
+
+def _normalize_search_results(
+    *, mode: SearchMode, raw_results: list[dict[str, object]]
+) -> list[SearchResult]:
+    normalized = [
+        _normalize_result(mode=mode, result=item)
+        for item in raw_results
+        if isinstance(item, dict)
+    ]
+    return [item for item in normalized if item is not None]
 
 
 def _normalize_result(
@@ -156,59 +173,94 @@ def _as_non_empty(value: object) -> str | None:
     return None
 
 
-def _search_text_with_fallback(
+def _search_mode_with_backends(
     *,
     ddgs: DDGS,
     query: str,
     settings: Settings,
+    mode: Literal["search", "news"],
     backends: tuple[str, ...],
-) -> list[dict[str, object]]:
+    max_results: int,
+    strategy: Literal["first_non_empty", "aggregate"],
+) -> list[SearchResult]:
     last_exception: Exception | None = None
     attempts = tuple(_dedupe_backends(backends))
     _debug_log(
         settings=settings,
         event="search_backend_chain",
-        mode="search",
+        mode=mode,
         backend_count=len(attempts),
+        strategy=strategy,
     )
+
+    aggregate_results: list[SearchResult] = []
+    if strategy == "aggregate":
+        _debug_log(
+            settings=settings,
+            event="search_backend_aggregate_begin",
+            mode=mode,
+            backend_count=len(attempts),
+        )
+
     for backend in attempts:
         try:
-            raw_results = ddgs.text(
-                query,
-                region=settings.bot_search_region,
-                safesearch=settings.bot_search_safesearch,
-                max_results=settings.bot_search_text_max_results,
+            raw_results = _run_backend_search(
+                ddgs=ddgs,
+                mode=mode,
+                query=query,
+                settings=settings,
                 backend=backend,
+                max_results=max_results,
             )
         except (DDGSException, TimeoutException, RatelimitException) as exc:
             last_exception = exc
             _debug_log(
                 settings=settings,
                 event="search_backend_attempt",
-                mode="search",
+                mode=mode,
                 backend=backend,
                 status="error",
                 reason_code=exc.__class__.__name__,
             )
             continue
 
-        normalized = _normalize_raw_results(raw_results)
+        normalized_raw_results = _normalize_raw_results(raw_results)
+        normalized = _normalize_search_results(mode=mode, raw_results=normalized_raw_results)
         _debug_log(
             settings=settings,
             event="search_backend_attempt",
-            mode="search",
+            mode=mode,
             backend=backend,
             status="ok" if normalized else "empty",
             result_count=len(normalized),
         )
-        if normalized:
-            return normalized
+        if strategy == "first_non_empty":
+            if normalized:
+                return normalized
+            continue
+
+        aggregate_results.extend(normalized)
+
+    if strategy == "aggregate":
+        deduped = _dedupe_search_results(aggregate_results)
+        capped = deduped[: max(1, max_results)]
+        _debug_log(
+            settings=settings,
+            event="search_backend_aggregate_complete",
+            mode=mode,
+            merged_count=len(aggregate_results),
+            deduped_count=len(deduped),
+            returned_count=len(capped),
+        )
+        if capped:
+            return capped
 
     _debug_log(
         settings=settings,
         event="search_backend_exhausted",
-        mode="search",
+        mode=mode,
         backend_count=len(attempts),
+        strategy=strategy,
         reason_code=(
             last_exception.__class__.__name__ if last_exception is not None else "empty"
         ),
@@ -218,66 +270,30 @@ def _search_text_with_fallback(
     return []
 
 
-def _search_news_with_fallback(
+def _run_backend_search(
     *,
     ddgs: DDGS,
+    mode: Literal["search", "news"],
     query: str,
     settings: Settings,
-    backends: tuple[str, ...],
+    backend: str,
+    max_results: int,
 ) -> list[dict[str, object]]:
-    last_exception: Exception | None = None
-    attempts = tuple(_dedupe_backends(backends))
-    _debug_log(
-        settings=settings,
-        event="search_backend_chain",
-        mode="news",
-        backend_count=len(attempts),
-    )
-    for backend in attempts:
-        try:
-            raw_results = ddgs.news(
-                query,
-                region=settings.bot_search_region,
-                safesearch=settings.bot_search_safesearch,
-                max_results=settings.bot_search_news_max_results,
-                backend=backend,
-            )
-        except (DDGSException, TimeoutException, RatelimitException) as exc:
-            last_exception = exc
-            _debug_log(
-                settings=settings,
-                event="search_backend_attempt",
-                mode="news",
-                backend=backend,
-                status="error",
-                reason_code=exc.__class__.__name__,
-            )
-            continue
-
-        normalized = _normalize_raw_results(raw_results)
-        _debug_log(
-            settings=settings,
-            event="search_backend_attempt",
-            mode="news",
+    if mode == "search":
+        return ddgs.text(
+            query,
+            region=settings.bot_search_region,
+            safesearch=settings.bot_search_safesearch,
+            max_results=max_results,
             backend=backend,
-            status="ok" if normalized else "empty",
-            result_count=len(normalized),
         )
-        if normalized:
-            return normalized
-
-    _debug_log(
-        settings=settings,
-        event="search_backend_exhausted",
-        mode="news",
-        backend_count=len(attempts),
-        reason_code=(
-            last_exception.__class__.__name__ if last_exception is not None else "empty"
-        ),
+    return ddgs.news(
+        query,
+        region=settings.bot_search_region,
+        safesearch=settings.bot_search_safesearch,
+        max_results=max_results,
+        backend=backend,
     )
-    if last_exception is not None:
-        raise last_exception
-    return []
 
 
 def _normalize_raw_results(raw_results: object) -> list[dict[str, object]]:
@@ -288,6 +304,18 @@ def _normalize_raw_results(raw_results: object) -> list[dict[str, object]]:
         if isinstance(item, dict):
             cleaned.append(cast(dict[str, object], item))
     return cleaned
+
+
+def _dedupe_search_results(results: list[SearchResult]) -> list[SearchResult]:
+    deduped: list[SearchResult] = []
+    seen_urls: set[str] = set()
+    for result in results:
+        key = result.url.strip()
+        if not key or key in seen_urls:
+            continue
+        deduped.append(result)
+        seen_urls.add(key)
+    return deduped
 
 
 def _dedupe_backends(backends: tuple[str, ...]) -> tuple[str, ...]:

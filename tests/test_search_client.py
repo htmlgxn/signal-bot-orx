@@ -234,3 +234,95 @@ async def test_search_client_news_fallback_uses_next_backend_on_error(
         "duckduckgo",
         "bing",
     ]
+
+
+@pytest.mark.anyio
+async def test_search_client_aggregate_queries_all_backends_and_caps_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeDDGS()
+    fake.text_responses_by_backend = {
+        "duckduckgo": [
+            {"title": "One", "href": "https://shared.example", "body": "ddg-1"},
+            {"title": "Two", "href": "https://ddg-only.example", "body": "ddg-2"},
+        ],
+        "bing": [
+            {"title": "Three", "href": "https://shared.example", "body": "bing-1"},
+            {"title": "Four", "href": "https://bing-only.example", "body": "bing-2"},
+        ],
+        "google": [
+            {"title": "Five", "href": "https://google-only.example", "body": "g-1"},
+        ],
+        "yandex": [],
+        "grokipedia": [],
+    }
+    monkeypatch.setattr("signal_bot_orx.search_client.DDGS", lambda **_: fake)
+    client = SearchClient()
+    settings = replace(
+        _settings(),
+        bot_search_backend_strategy="aggregate",
+        bot_search_text_max_results=3,
+    )
+
+    results = await client.search("search", "hello", settings)
+
+    assert [item.url for item in results] == [
+        "https://shared.example",
+        "https://ddg-only.example",
+        "https://bing-only.example",
+    ]
+    assert [call[2]["backend"] for call in fake.calls if call[0] == "text"] == [
+        "duckduckgo",
+        "bing",
+        "google",
+        "yandex",
+        "grokipedia",
+    ]
+
+
+@pytest.mark.anyio
+async def test_search_client_aggregate_tolerates_partial_backend_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeDDGS()
+    fake.text_errors_by_backend = {"duckduckgo": DDGSException("down")}
+    fake.text_responses_by_backend = {
+        "duckduckgo": [],
+        "bing": [{"title": "B", "href": "https://bing-only.example", "body": "b"}],
+        "google": [],
+        "yandex": [],
+        "grokipedia": [],
+    }
+    monkeypatch.setattr("signal_bot_orx.search_client.DDGS", lambda **_: fake)
+    client = SearchClient()
+    settings = replace(
+        _settings(),
+        bot_search_backend_strategy="aggregate",
+    )
+
+    results = await client.search("search", "hello", settings)
+
+    assert [item.url for item in results] == ["https://bing-only.example"]
+
+
+@pytest.mark.anyio
+async def test_search_client_aggregate_raises_error_when_all_backends_fail_or_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeDDGS()
+    fake.text_errors_by_backend = {
+        "duckduckgo": DDGSException("down"),
+        "bing": DDGSException("down"),
+        "google": DDGSException("down"),
+        "yandex": DDGSException("down"),
+        "grokipedia": DDGSException("down"),
+    }
+    monkeypatch.setattr("signal_bot_orx.search_client.DDGS", lambda **_: fake)
+    client = SearchClient()
+    settings = replace(
+        _settings(),
+        bot_search_backend_strategy="aggregate",
+    )
+
+    with pytest.raises(SearchError):
+        await client.search("search", "hello", settings)
