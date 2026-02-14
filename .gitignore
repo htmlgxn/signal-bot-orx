@@ -19,6 +19,7 @@ dist/
 coverage.xml
 .htmlcov/
 .tox/
+restart.sh
 
 # ===== IDE/Editor =====
 .idea/
