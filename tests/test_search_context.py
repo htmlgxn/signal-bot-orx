@@ -142,3 +142,58 @@ def test_search_context_pending_followup_expires_by_ttl(
 
     now = 6.0
     assert store.get_pending_followup("group:1") is None
+
+
+def test_search_context_pending_video_selection_lifecycle() -> None:
+    store = SearchContextStore(ttl_seconds=1800)
+    store.set_pending_video_selection(
+        "group:1",
+        query="nick land interview",
+        results=[
+            SearchResult(
+                mode="videos",
+                title="First video",
+                url="https://youtube.com/watch?v=abc123",
+                snippet="",
+                image_url="https://img.example/thumb.jpg",
+            )
+        ],
+    )
+
+    pending = store.get_pending_video_selection("group:1")
+    assert pending is not None
+    assert pending.query == "nick land interview"
+    assert len(pending.results) == 1
+    assert pending.results[0].title == "First video"
+
+    store.clear_pending_video_selection("group:1")
+    assert store.get_pending_video_selection("group:1") is None
+
+
+def test_search_context_pending_video_selection_expires_by_ttl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = 0.0
+
+    def fake_monotonic() -> float:
+        return now
+
+    monkeypatch.setattr("signal_bot_orx.search_context.time.monotonic", fake_monotonic)
+    store = SearchContextStore(ttl_seconds=5)
+    store.set_pending_video_selection(
+        "group:1",
+        query="nick land interview",
+        results=[
+            SearchResult(
+                mode="videos",
+                title="First video",
+                url="https://youtube.com/watch?v=abc123",
+                snippet="",
+                image_url="https://img.example/thumb.jpg",
+            )
+        ],
+    )
+    assert store.get_pending_video_selection("group:1") is not None
+
+    now = 6.0
+    assert store.get_pending_video_selection("group:1") is None

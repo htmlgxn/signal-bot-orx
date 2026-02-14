@@ -40,6 +40,7 @@ SEARCH_COMMANDS: dict[str, SearchMode] = {
     "/news": "news",
     "/wiki": "wiki",
     "/images": "images",
+    "/videos": "videos",
 }
 
 
@@ -121,6 +122,7 @@ class WebhookHandler:
         )
         if source_claim is not None:
             self._clear_pending_followup_state(parsed)
+            self._clear_pending_video_selection_state(parsed)
             self._log_search_route(
                 message_scope=message_scope,
                 mention_eligible=mention_eligible,
@@ -137,7 +139,13 @@ class WebhookHandler:
         if search_command is not None:
             mode, query = search_command
             self._clear_pending_followup_state(parsed)
-            final_path = "search_image" if mode == "images" else "search_summary"
+            self._clear_pending_video_selection_state(parsed)
+            if mode == "images":
+                final_path = "search_image"
+            elif mode == "videos":
+                final_path = "search_videos"
+            else:
+                final_path = "search_summary"
             self._log_search_route(
                 message_scope=message_scope,
                 mention_eligible=mention_eligible,
@@ -158,6 +166,7 @@ class WebhookHandler:
         )
         if imagine_prompt is not None:
             self._clear_pending_followup_state(parsed)
+            self._clear_pending_video_selection_state(parsed)
             self._log_search_route(
                 message_scope=message_scope,
                 mention_eligible=mention_eligible,
@@ -167,6 +176,35 @@ class WebhookHandler:
                 reason="imagine_command",
             )
             return self.handle_imagine_command(parsed, imagine_prompt, background_tasks)
+
+        video_selection_number = parse_video_selection_number(parsed.text) or (
+            parse_video_selection_number(command_text)
+            if command_text != parsed.text
+            else None
+        )
+        if (
+            video_selection_number is not None
+            and self._search_service is not None
+            and self._settings.bot_search_enabled
+        ):
+            pending_video = self._search_service.get_pending_video_selection_state(
+                conversation_key=conversation_key_for_message(parsed),
+            )
+            if pending_video is not None:
+                self._log_search_route(
+                    message_scope=message_scope,
+                    mention_eligible=mention_eligible,
+                    slash_command=None,
+                    auto_decision=None,
+                    final_path="search_video_selection",
+                    reason="video_selection",
+                )
+                background_tasks.add_task(
+                    self._process_search_video_selection,
+                    parsed,
+                    video_selection_number,
+                )
+                return {"status": "accepted", "reason": "search_video_selection_queued"}
 
         if not mention_eligible:
             self._log_search_route(
@@ -345,10 +383,12 @@ class WebhookHandler:
                     )
 
             if pending_state is None:
-                followup_resolution = await self._search_service.resolve_followup_prompt(
-                    prompt=chat_prompt,
-                    history_context=followup_history_context,
-                    source_context=source_context,
+                followup_resolution = (
+                    await self._search_service.resolve_followup_prompt(
+                        prompt=chat_prompt,
+                        history_context=followup_history_context,
+                        source_context=source_context,
+                    )
                 )
                 self._log_followup_resolution(
                     event="followup_resolution_detected",
@@ -537,6 +577,10 @@ class WebhookHandler:
         if mode == "images":
             background_tasks.add_task(self._process_search_image, message, query)
             return {"status": "accepted", "reason": "search_image_queued"}
+
+        if mode == "videos":
+            background_tasks.add_task(self._process_search_videos_list, message, query)
+            return {"status": "accepted", "reason": "search_videos_queued"}
 
         background_tasks.add_task(self._process_search_summary, message, mode, query)
         return {"status": "accepted", "reason": "search_queued"}
@@ -800,6 +844,102 @@ class WebhookHandler:
                 reply_target,
             )
 
+    async def _process_search_videos_list(
+        self,
+        message: IncomingMessage,
+        query: str,
+    ) -> None:
+        if self._search_service is None:
+            return
+
+        reply_target = resolve_reply_target(message, self._settings)
+        conversation_key = conversation_key_for_message(message)
+
+        try:
+            response_text = await self._search_service.video_list_reply(
+                conversation_key=conversation_key,
+                query=query,
+            )
+            await self._signal_client.send_text(
+                target=reply_target,
+                message=_truncate_reply(response_text),
+            )
+        except SearchError as exc:
+            await self._safe_send_text(message, exc.user_message, reply_target)
+        except SignalSendError:
+            logger.exception(
+                "signal_send_error sender=%s group_id=%s",
+                message.sender,
+                message.target.group_id,
+            )
+        except Exception:
+            logger.exception("unexpected_search_videos_error sender=%s", message.sender)
+            await self._safe_send_text(
+                message,
+                "Unexpected error while searching videos.",
+                reply_target,
+            )
+
+    async def _process_search_video_selection(
+        self,
+        message: IncomingMessage,
+        selection_number: int,
+    ) -> None:
+        if self._search_service is None:
+            return
+
+        reply_target = resolve_reply_target(message, self._settings)
+        conversation_key = conversation_key_for_message(message)
+        fallback_recipient = (
+            message.sender if reply_target.group_id is not None else None
+        )
+
+        try:
+            (
+                image_bytes,
+                content_type,
+                url,
+                title,
+            ) = await self._search_service.resolve_video_selection(
+                conversation_key=conversation_key,
+                selection_number=selection_number,
+            )
+            self._search_service.clear_pending_video_selection_state(
+                conversation_key=conversation_key,
+            )
+            video_text = _truncate_reply(f"{title}\n{url}")
+            if image_bytes is not None and content_type is not None:
+                await self._signal_client.send_image(
+                    target=reply_target,
+                    image_bytes=image_bytes,
+                    content_type=content_type,
+                    caption=video_text[:200],
+                )
+                return
+
+            await self._signal_client.send_text(
+                target=reply_target,
+                message=video_text,
+                fallback_recipient=fallback_recipient,
+            )
+        except SearchError as exc:
+            await self._safe_send_text(message, exc.user_message, reply_target)
+        except SignalSendError:
+            logger.exception(
+                "signal_send_error sender=%s group_id=%s",
+                message.sender,
+                message.target.group_id,
+            )
+        except Exception:
+            logger.exception(
+                "unexpected_search_video_selection_error sender=%s", message.sender
+            )
+            await self._safe_send_text(
+                message,
+                "Unexpected error while selecting video result.",
+                reply_target,
+            )
+
     async def _process_source_lookup(
         self, message: IncomingMessage, claim: str
     ) -> None:
@@ -851,6 +991,13 @@ class WebhookHandler:
         if self._search_service is None:
             return
         self._search_service.clear_pending_followup_state(
+            conversation_key=conversation_key_for_message(message),
+        )
+
+    def _clear_pending_video_selection_state(self, message: IncomingMessage) -> None:
+        if self._search_service is None:
+            return
+        self._search_service.clear_pending_video_selection_state(
             conversation_key=conversation_key_for_message(message),
         )
 
@@ -1090,7 +1237,22 @@ def is_search_mode_enabled(mode: SearchMode, settings: Settings) -> bool:
         return settings.bot_search_mode_wiki_enabled
     if mode == "images":
         return settings.bot_search_mode_images_enabled
+    if mode == "videos":
+        return settings.bot_search_mode_videos_enabled
     return False
+
+
+def parse_video_selection_number(text: str) -> int | None:
+    stripped = text.strip()
+    if not re.fullmatch(r"\d+", stripped):
+        return None
+    try:
+        value = int(stripped)
+    except ValueError:
+        return None
+    if value <= 0:
+        return None
+    return value
 
 
 def _chat_usage_message(message: IncomingMessage) -> str:

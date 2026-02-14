@@ -10,7 +10,7 @@ from ddgs.exceptions import DDGSException, RatelimitException, TimeoutException
 
 from signal_bot_orx.config import Settings
 
-SearchMode = Literal["search", "news", "wiki", "images"]
+SearchMode = Literal["search", "news", "wiki", "images", "videos"]
 logger = logging.getLogger(__name__)
 
 
@@ -97,6 +97,14 @@ class SearchClient:
                     max_results=settings.bot_search_wiki_max_results,
                     backend=settings.bot_search_backend_wiki,
                 )
+            elif mode == "videos":
+                raw_results = ddgs.videos(
+                    query,
+                    region=settings.bot_search_region,
+                    safesearch=settings.bot_search_safesearch,
+                    max_results=settings.bot_search_videos_max_results,
+                    backend=settings.bot_search_backend_videos,
+                )
             else:
                 raw_results = ddgs.images(
                     query,
@@ -128,6 +136,30 @@ def _normalize_search_results(
 def _normalize_result(
     mode: SearchMode, result: dict[str, object]
 ) -> SearchResult | None:
+    if mode == "videos":
+        title = _as_non_empty(result.get("title")) or "Untitled video"
+        url = _as_non_empty(result.get("content")) or _as_non_empty(result.get("url"))
+        if url is None:
+            return None
+        snippet = (
+            _as_non_empty(result.get("description"))
+            or _as_non_empty(result.get("body"))
+            or _as_non_empty(result.get("content"))
+            or ""
+        )
+        source = _as_non_empty(result.get("publisher")) or _as_non_empty(
+            result.get("source")
+        )
+        return SearchResult(
+            mode=mode,
+            title=title,
+            url=url,
+            snippet=snippet,
+            source=source,
+            date=_as_non_empty(result.get("published")),
+            image_url=_extract_video_thumbnail_url(result),
+        )
+
     if mode == "images":
         title = _as_non_empty(result.get("title")) or "Untitled image"
         image_url = _as_non_empty(result.get("image"))
@@ -171,6 +203,41 @@ def _as_non_empty(value: object) -> str | None:
         if stripped:
             return stripped
     return None
+
+
+def _as_http_url(value: object) -> str | None:
+    candidate = _as_non_empty(value)
+    if candidate is None:
+        return None
+    if candidate.startswith(("http://", "https://")):
+        return candidate
+    return None
+
+
+def _extract_video_thumbnail_url(result: dict[str, object]) -> str | None:
+    images_value = result.get("images")
+    if isinstance(images_value, dict):
+        image_map = cast(dict[object, object], images_value)
+        preferred = _as_http_url(image_map.get("0"))
+        if preferred is not None:
+            return preferred
+        alternate = _as_http_url(image_map.get(0))
+        if alternate is not None:
+            return alternate
+        fallback = _as_http_url(image_map.get("1")) or _as_http_url(image_map.get(1))
+        if fallback is not None:
+            return fallback
+
+    if isinstance(images_value, (list, tuple)) and images_value:
+        preferred = _as_http_url(images_value[0])
+        if preferred is not None:
+            return preferred
+
+    return (
+        _as_http_url(result.get("thumbnail"))
+        or _as_http_url(result.get("thumbnail_url"))
+        or _as_http_url(result.get("image"))
+    )
 
 
 def _search_mode_with_backends(
@@ -225,7 +292,9 @@ def _search_mode_with_backends(
             continue
 
         normalized_raw_results = _normalize_raw_results(raw_results)
-        normalized = _normalize_search_results(mode=mode, raw_results=normalized_raw_results)
+        normalized = _normalize_search_results(
+            mode=mode, raw_results=normalized_raw_results
+        )
         _debug_log(
             settings=settings,
             event="search_backend_attempt",

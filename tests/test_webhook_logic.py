@@ -31,6 +31,7 @@ from signal_bot_orx.webhook import (
     parse_search_command,
     parse_source_command,
     parse_source_request_text,
+    parse_video_selection_number,
     resolve_reply_target,
     should_handle_chat_mention,
 )
@@ -53,7 +54,19 @@ def test_parse_search_command() -> None:
     assert parse_search_command("/search openrouter") == ("search", "openrouter")
     assert parse_search_command("/wiki Ada Lovelace") == ("wiki", "Ada Lovelace")
     assert parse_search_command("/images cats") == ("images", "cats")
+    assert parse_search_command("/videos nick land interview") == (
+        "videos",
+        "nick land interview",
+    )
     assert parse_search_command("hello world") is None
+
+
+def test_parse_video_selection_number() -> None:
+    assert parse_video_selection_number("1") == 1
+    assert parse_video_selection_number(" 12 ") == 12
+    assert parse_video_selection_number("0") is None
+    assert parse_video_selection_number("abc") is None
+    assert parse_video_selection_number("/pick 1") is None
 
 
 def test_parse_source_command() -> None:
@@ -139,6 +152,7 @@ def _settings(
     search_mode_news_enabled: bool = True,
     search_mode_wiki_enabled: bool = True,
     search_mode_images_enabled: bool = True,
+    search_mode_videos_enabled: bool = True,
     search_debug_logging: bool = False,
     search_persona_enabled: bool = False,
     search_use_history_for_summary: bool = False,
@@ -163,6 +177,7 @@ def _settings(
         bot_search_mode_news_enabled=search_mode_news_enabled,
         bot_search_mode_wiki_enabled=search_mode_wiki_enabled,
         bot_search_mode_images_enabled=search_mode_images_enabled,
+        bot_search_mode_videos_enabled=search_mode_videos_enabled,
         bot_search_debug_logging=search_debug_logging,
         bot_search_persona_enabled=search_persona_enabled,
         bot_search_use_history_for_summary=search_use_history_for_summary,
@@ -368,6 +383,9 @@ class _FakeSearchService:
         self.search_user_requests: list[str | None] = []
         self.search_history_contexts: list[list[dict[str, str]] | None] = []
         self.image_calls: list[str] = []
+        self.video_list_calls: list[str] = []
+        self.video_selection_calls: list[int] = []
+        self.pending_video: dict[str, bool] = {}
         self.source_calls: list[str] = []
 
     async def decide_auto_search(self, prompt: str) -> SearchRouteDecision:
@@ -493,6 +511,44 @@ class _FakeSearchService:
         del conversation_key
         self.image_calls.append(query)
         return b"image", "image/png"
+
+    async def video_list_reply(
+        self,
+        *,
+        conversation_key: str,
+        query: str,
+    ) -> str:
+        self.video_list_calls.append(query)
+        self.pending_video[conversation_key] = True
+        return "Videos:\n1. First video\n2. Second video\nReply with a number to send the thumbnail and URL."
+
+    async def resolve_video_selection(
+        self,
+        *,
+        conversation_key: str,
+        selection_number: int,
+    ) -> tuple[bytes | None, str | None, str, str]:
+        self.video_selection_calls.append(selection_number)
+        if not self.pending_video.get(conversation_key):
+            raise RuntimeError("missing pending video state")
+        return (
+            b"thumb",
+            "image/png",
+            "https://youtube.com/watch?v=abc123",
+            "First video",
+        )
+
+    def get_pending_video_selection_state(
+        self,
+        *,
+        conversation_key: str,
+    ) -> object | None:
+        if self.pending_video.get(conversation_key):
+            return {"conversation_key": conversation_key}
+        return None
+
+    def clear_pending_video_selection_state(self, *, conversation_key: str) -> None:
+        self.pending_video.pop(conversation_key, None)
 
     def source_reply(self, *, conversation_key: str, claim: str) -> str:
         del conversation_key
@@ -691,13 +747,16 @@ async def test_handle_webhook_explicit_search_command_clears_pending_followup() 
     await handler.handle_webhook(payload, background_tasks)
     await _run_background_tasks(background_tasks)
 
-    assert fake_search.get_pending_followup_state(
-        conversation_key="dm:+15550002222"
-    ) is None
+    assert (
+        fake_search.get_pending_followup_state(conversation_key="dm:+15550002222")
+        is None
+    )
 
 
 @pytest.mark.anyio
-async def test_handle_webhook_search_command_logs_route_debug(caplog: pytest.LogCaptureFixture) -> None:
+async def test_handle_webhook_search_command_logs_route_debug(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     payload = {
         "envelope": {
             "sourceNumber": "+15550002222",
@@ -837,6 +896,132 @@ async def test_handle_webhook_images_command_sends_attachment() -> None:
 
 
 @pytest.mark.anyio
+async def test_handle_webhook_videos_command_sends_numbered_list() -> None:
+    payload = {
+        "envelope": {
+            "sourceNumber": "+15550002222",
+            "timestamp": 1730000000001,
+            "dataMessage": {
+                "message": "/videos nick land interview",
+                "timestamp": 1730000000001,
+            },
+        }
+    }
+    fake_signal = _FakeSignalClient()
+    fake_search = _FakeSearchService()
+    handler = WebhookHandler(
+        settings=_settings(mode="group"),
+        signal_client=cast(Any, fake_signal),
+        openrouter_client=cast(Any, _FakeOpenRouterClient()),
+        chat_context=cast(Any, _FakeChatContextStore()),
+        openrouter_image_client=None,
+        dedupe=DedupeCache(ttl_seconds=60),
+        search_service=cast(Any, fake_search),
+    )
+
+    background_tasks = BackgroundTasks()
+    response = await handler.handle_webhook(payload, background_tasks)
+    await _run_background_tasks(background_tasks)
+
+    assert response == {"status": "accepted", "reason": "search_videos_queued"}
+    assert fake_search.video_list_calls == ["nick land interview"]
+    assert fake_signal.text_messages
+    assert fake_signal.text_messages[0].startswith("Videos:")
+
+
+@pytest.mark.anyio
+async def test_handle_webhook_numeric_video_selection_sends_image_and_url() -> None:
+    first_payload = {
+        "envelope": {
+            "sourceNumber": "+15550002222",
+            "timestamp": 1730000000001,
+            "dataMessage": {
+                "message": "/videos nick land interview",
+                "timestamp": 1730000000001,
+            },
+        }
+    }
+    second_payload = {
+        "envelope": {
+            "sourceNumber": "+15550002222",
+            "timestamp": 1730000000002,
+            "dataMessage": {
+                "message": "1",
+                "timestamp": 1730000000002,
+            },
+        }
+    }
+    fake_signal = _FakeSignalClient()
+    fake_search = _FakeSearchService()
+    handler = WebhookHandler(
+        settings=_settings(mode="group"),
+        signal_client=cast(Any, fake_signal),
+        openrouter_client=cast(Any, _FakeOpenRouterClient()),
+        chat_context=cast(Any, _FakeChatContextStore()),
+        openrouter_image_client=None,
+        dedupe=DedupeCache(ttl_seconds=60),
+        search_service=cast(Any, fake_search),
+    )
+
+    first_tasks = BackgroundTasks()
+    await handler.handle_webhook(first_payload, first_tasks)
+    await _run_background_tasks(first_tasks)
+
+    second_tasks = BackgroundTasks()
+    response = await handler.handle_webhook(second_payload, second_tasks)
+    await _run_background_tasks(second_tasks)
+
+    assert response == {
+        "status": "accepted",
+        "reason": "search_video_selection_queued",
+    }
+    assert fake_search.video_selection_calls == [1]
+    assert len(fake_signal.image_targets) == 1
+    assert fake_signal.image_captions[-1] is not None
+    assert "https://youtube.com/watch?v=abc123" in (fake_signal.image_captions[-1] or "")
+    assert not any(
+        "https://youtube.com/watch?v=abc123" in msg for msg in fake_signal.text_messages
+    )
+
+
+@pytest.mark.anyio
+async def test_handle_webhook_numeric_message_without_pending_video_is_not_hijacked() -> (
+    None
+):
+    payload = {
+        "envelope": {
+            "sourceNumber": "+15550002222",
+            "timestamp": 1730000000001,
+            "dataMessage": {
+                "message": "1",
+                "timestamp": 1730000000001,
+            },
+        }
+    }
+    fake_signal = _FakeSignalClient()
+    fake_context = _FakeChatContextStore()
+    fake_openrouter = _FakeOpenRouterClient(reply="chat-response")
+    fake_search = _FakeSearchService()
+    handler = WebhookHandler(
+        settings=_settings(mode="group"),
+        signal_client=cast(Any, fake_signal),
+        openrouter_client=cast(Any, fake_openrouter),
+        chat_context=cast(Any, fake_context),
+        openrouter_image_client=None,
+        dedupe=DedupeCache(ttl_seconds=60),
+        search_service=cast(Any, fake_search),
+    )
+
+    background_tasks = BackgroundTasks()
+    response = await handler.handle_webhook(payload, background_tasks)
+    await _run_background_tasks(background_tasks)
+
+    assert response == {"status": "accepted", "reason": "chat_queued"}
+    assert fake_search.video_selection_calls == []
+    assert fake_signal.text_messages == ["chat-response"]
+
+
+@pytest.mark.anyio
 async def test_handle_webhook_source_command_returns_sources() -> None:
     payload = {
         "envelope": {
@@ -921,7 +1106,9 @@ async def test_handle_webhook_auto_search_from_dm() -> None:
 
 
 @pytest.mark.anyio
-async def test_handle_webhook_auto_search_resolves_followup_prompt_before_routing() -> None:
+async def test_handle_webhook_auto_search_resolves_followup_prompt_before_routing() -> (
+    None
+):
     payload = {
         "envelope": {
             "sourceNumber": "+15550002222",
@@ -1108,7 +1295,9 @@ async def test_handle_webhook_pending_followup_reply_autofills_and_routes() -> N
 
 
 @pytest.mark.anyio
-async def test_handle_webhook_pending_followup_second_failure_requests_rephrase() -> None:
+async def test_handle_webhook_pending_followup_second_failure_requests_rephrase() -> (
+    None
+):
     first_payload = {
         "envelope": {
             "sourceNumber": "+15550002222",
@@ -1177,7 +1366,9 @@ async def test_handle_webhook_pending_followup_second_failure_requests_rephrase(
 
 
 @pytest.mark.anyio
-async def test_handle_webhook_auto_search_logs_route_debug(caplog: pytest.LogCaptureFixture) -> None:
+async def test_handle_webhook_auto_search_logs_route_debug(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     payload = {
         "envelope": {
             "sourceNumber": "+15550002222",

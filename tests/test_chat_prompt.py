@@ -66,17 +66,14 @@ def test_coerce_plain_text_reply_splits_inline_numbered_list() -> None:
 
 
 def test_default_system_prompt_loaded_from_markdown_file() -> None:
-    prompt_dir = (
-        Path(__file__).parents[1]
-        / "src"
-        / "signal_bot_orx"
-    )
+    prompt_dir = Path(__file__).parents[1] / "src" / "signal_bot_orx"
     local_prompt_path = prompt_dir / "chat_system_prompt.md"
     default_prompt_path = prompt_dir / "default_chat_system_prompt.md"
     expected_path = default_prompt_path
-    if local_prompt_path.exists() and local_prompt_path.read_text(
-        encoding="utf-8"
-    ).strip():
+    if (
+        local_prompt_path.exists()
+        and local_prompt_path.read_text(encoding="utf-8").strip()
+    ):
         expected_path = local_prompt_path
 
     assert (
@@ -87,11 +84,7 @@ def test_default_system_prompt_loaded_from_markdown_file() -> None:
 def test_default_system_prompt_prefers_local_prompt_file(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    prompt_dir = (
-        Path(__file__).parents[1]
-        / "src"
-        / "signal_bot_orx"
-    )
+    prompt_dir = Path(__file__).parents[1] / "src" / "signal_bot_orx"
     monkeypatch.setattr(
         chat_prompt_module,
         "_LOCAL_CHAT_PROMPT_PATH",
@@ -104,9 +97,10 @@ def test_default_system_prompt_prefers_local_prompt_file(
     )
 
     loaded = chat_prompt_module._load_default_chat_system_prompt()
-    assert loaded == (prompt_dir / "chat_system_prompt.md").read_text(
-        encoding="utf-8"
-    ).strip()
+    assert (
+        loaded
+        == (prompt_dir / "chat_system_prompt.md").read_text(encoding="utf-8").strip()
+    )
 
 
 def test_default_system_prompt_bootstraps_local_file_when_missing(
@@ -117,7 +111,9 @@ def test_default_system_prompt_bootstraps_local_file_when_missing(
     default_prompt_path = tmp_path / "default_chat_system_prompt.md"
     default_prompt_path.write_text("default prompt body", encoding="utf-8")
 
-    monkeypatch.setattr(chat_prompt_module, "_LOCAL_CHAT_PROMPT_PATH", local_prompt_path)
+    monkeypatch.setattr(
+        chat_prompt_module, "_LOCAL_CHAT_PROMPT_PATH", local_prompt_path
+    )
     monkeypatch.setattr(
         chat_prompt_module,
         "_DEFAULT_CHAT_PROMPT_PATH",
@@ -127,4 +123,6 @@ def test_default_system_prompt_bootstraps_local_file_when_missing(
     loaded = chat_prompt_module._load_default_chat_system_prompt()
 
     assert loaded == "default prompt body"
-    assert local_prompt_path.read_text(encoding="utf-8").strip() == "default prompt body"
+    assert (
+        local_prompt_path.read_text(encoding="utf-8").strip() == "default prompt body"
+    )

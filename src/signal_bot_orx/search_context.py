@@ -25,6 +25,20 @@ class PendingFollowupState:
     attempts: int
 
 
+@dataclass(frozen=True)
+class PendingVideoSelection:
+    title: str
+    url: str
+    thumbnail_url: str | None
+
+
+@dataclass(frozen=True)
+class PendingVideoSelectionState:
+    query: str
+    results: tuple[PendingVideoSelection, ...]
+    created_at: float
+
+
 class SearchContextStore:
     def __init__(
         self, *, ttl_seconds: int, max_records_per_conversation: int = 40
@@ -33,6 +47,7 @@ class SearchContextStore:
         self._max_records_per_conversation = max(1, max_records_per_conversation)
         self._records: dict[str, list[SourceRecord]] = {}
         self._pending_followups: dict[str, PendingFollowupState] = {}
+        self._pending_video_selections: dict[str, PendingVideoSelectionState] = {}
 
     def remember_results(
         self,
@@ -161,6 +176,45 @@ class SearchContextStore:
         self._pending_followups[conversation_key] = updated
         return updated.attempts
 
+    def set_pending_video_selection(
+        self,
+        conversation_key: str,
+        *,
+        query: str,
+        results: list[SearchResult],
+    ) -> None:
+        now = time.monotonic()
+        self._purge(now)
+        selections: list[PendingVideoSelection] = []
+        for result in results:
+            if not result.url.strip():
+                continue
+            selections.append(
+                PendingVideoSelection(
+                    title=result.title.strip() or "Untitled video",
+                    url=result.url.strip(),
+                    thumbnail_url=(
+                        result.image_url.strip() if result.image_url else None
+                    ),
+                )
+            )
+        self._pending_video_selections[conversation_key] = PendingVideoSelectionState(
+            query=query,
+            results=tuple(selections),
+            created_at=now,
+        )
+
+    def get_pending_video_selection(
+        self,
+        conversation_key: str,
+    ) -> PendingVideoSelectionState | None:
+        now = time.monotonic()
+        self._purge(now)
+        return self._pending_video_selections.get(conversation_key)
+
+    def clear_pending_video_selection(self, conversation_key: str) -> None:
+        self._pending_video_selections.pop(conversation_key, None)
+
     def _purge(self, now: float) -> None:
         expired_keys: list[str] = []
         for conversation_key, records in self._records.items():
@@ -184,6 +238,14 @@ class SearchContextStore:
         ]
         for key in pending_expired:
             del self._pending_followups[key]
+
+        pending_video_expired = [
+            key
+            for key, pending in self._pending_video_selections.items()
+            if pending.created_at + self._ttl_seconds <= now
+        ]
+        for key in pending_video_expired:
+            del self._pending_video_selections[key]
 
 
 def _claim_key(result: SearchResult) -> str:

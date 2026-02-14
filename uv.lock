@@ -132,17 +132,13 @@ wheels = [
 [[package]]
 name = "ddgs"
 version = "9.10.0"
-source = { registry = "https://pypi.org/simple" }
+source = { git = "ssh://git@github.com/htmlgxn/ddgs-more.git?rev=2638d08#2638d080ab47a2504056ef412372569c4c6db504" }
 dependencies = [
     { name = "click" },
     { name = "fake-useragent" },
     { name = "httpx", extra = ["brotli", "http2", "socks"] },
     { name = "lxml" },
     { name = "primp" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/07/76/8dc0323d1577037abad7a679f8af150ebb73a94995d3012de71a8898e6e6/ddgs-9.10.0.tar.gz", hash = "sha256:d9381ff75bdf1ad6691d3d1dc2be12be190d1d32ecd24f1002c492143c52c34f", size = 31491, upload-time = "2025-12-17T23:30:15.021Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/b5/0e/d4b7d6a8df5074cf67bc14adead39955b0bf847c947ff6cad0bb527887f4/ddgs-9.10.0-py3-none-any.whl", hash = "sha256:81233d79309836eb03e7df2a0d2697adc83c47c342713132c0ba618f1f2c6eee", size = 40311, upload-time = "2025-12-17T23:30:13.606Z" },
 ]
 
 [[package]]
@@ -502,7 +498,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "ddgs", specifier = ">=9.10.0" },
+    { name = "ddgs", git = "ssh://git@github.com/htmlgxn/ddgs-more.git?rev=2638d08" },
     { name = "fastapi", specifier = ">=0.116.1" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "uvicorn", specifier = ">=0.35.0" },

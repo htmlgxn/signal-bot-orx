@@ -4,6 +4,8 @@
 `signal-cli-rest-api` and OpenRouter. 
 It is designed for group chats and direct messages.
 
+> **Development Status:** This project is in active development. Some features may be broken or behave unexpectedly between updates.
+
 Primary behavior:
 - Mention-triggered group chat replies.
 - Direct-message chat replies without mention syntax.
@@ -86,6 +88,7 @@ Search options:
 - `BOT_SEARCH_MODE_NEWS_ENABLED` (default: `true`, controls `/news`)
 - `BOT_SEARCH_MODE_WIKI_ENABLED` (default: `true`, controls `/wiki`)
 - `BOT_SEARCH_MODE_IMAGES_ENABLED` (default: `true`, controls `/images`)
+- `BOT_SEARCH_MODE_VIDEOS_ENABLED` (default: `true`, controls `/videos`)
 - `BOT_SEARCH_DEBUG_LOGGING` (default: `false`, logs routing/summarization decisions without raw message/result payloads)
 - `BOT_SEARCH_PERSONA_ENABLED` (default: `false`, reuse core personality for search summaries)
 - `BOT_SEARCH_USE_HISTORY_FOR_SUMMARY` (default: `false`, include last 2 turns in search summary prompt)
@@ -98,16 +101,19 @@ Search options:
 - `BOT_SEARCH_BACKEND_NEWS` (default: `auto`, backend for `/news` + auto mode `news`)
 - `BOT_SEARCH_BACKEND_WIKI` (default: `wikipedia`, backend for `/wiki` + auto mode `wiki`)
 - `BOT_SEARCH_BACKEND_IMAGES` (default: `duckduckgo`, backend for `/images`)
+- `BOT_SEARCH_BACKEND_VIDEOS` (default: `youtube`, backend for `/videos`)
 - `BOT_SEARCH_TEXT_MAX_RESULTS` (default: `5`)
 - `BOT_SEARCH_NEWS_MAX_RESULTS` (default: `5`)
 - `BOT_SEARCH_WIKI_MAX_RESULTS` (default: `3`)
 - `BOT_SEARCH_IMAGES_MAX_RESULTS` (default: `3`, top image sent)
+- `BOT_SEARCH_VIDEOS_MAX_RESULTS` (default: `5`, numbered list size for `/videos`)
 - `BOT_SEARCH_TIMEOUT_SECONDS` (default: `8`)
 - `BOT_SEARCH_SOURCE_TTL_SECONDS` (default: `1800`)
 
 Default search privacy behavior:
 - `BOT_SEARCH_CONTEXT_MODE=no_context` means DDGS requests only run for explicit slash commands.
 - Set `BOT_SEARCH_CONTEXT_MODE=context` to allow model-routed auto-search from normal chat messages.
+- `/videos` is always explicit command mode and never selected by auto-routing.
 - In `context` mode, ambiguous follow-ups (for example, pronoun-only references) may trigger `Who are you referring to?`; a short next reply can be applied to continue the pending query.
 - You can disable any explicit DDGS command with its corresponding `BOT_SEARCH_MODE_*_ENABLED=false` flag.
 - Set `BOT_SEARCH_DEBUG_LOGGING=true` to inspect auto-search decisions (`should_search`, `mode`, query length, path) during debugging.
@@ -182,6 +188,13 @@ Explicit search commands:
 /news major AI regulation updates
 /wiki Ada Lovelace
 /images red fox watercolor
+/videos nick land interview
+```
+
+Video follow-up selection:
+
+```text
+1
 ```
 
 Source follow-ups:

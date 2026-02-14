@@ -55,9 +55,7 @@ class _FakeDDGS:
             ],
         }
         self.news_responses_by_backend: dict[str, list[dict[str, Any]]] = {
-            "auto": [
-                {"title": "News", "url": "https://news.example", "body": "story"}
-            ],
+            "auto": [{"title": "News", "url": "https://news.example", "body": "story"}],
             "duckduckgo": [
                 {"title": "DDG", "url": "https://ddgnews.example", "body": "ddg"}
             ],
@@ -66,8 +64,24 @@ class _FakeDDGS:
                 {"title": "Yahoo", "url": "https://yahoonews.example", "body": "y"}
             ],
         }
+        self.video_responses_by_backend: dict[str, list[dict[str, Any]]] = {
+            "youtube": [
+                {
+                    "title": "Video",
+                    "content": "https://youtube.com/watch?v=abc123",
+                    "description": "desc",
+                    "published": "2026-01-01",
+                    "publisher": "Example Channel",
+                    "images": {
+                        "0": "https://img.example/v-small.jpg",
+                        "1": "https://img.example/v-large.jpg",
+                    },
+                }
+            ]
+        }
         self.text_errors_by_backend: dict[str, Exception] = {}
         self.news_errors_by_backend: dict[str, Exception] = {}
+        self.video_errors_by_backend: dict[str, Exception] = {}
 
     def __enter__(self) -> _FakeDDGS:
         return self
@@ -100,6 +114,13 @@ class _FakeDDGS:
             }
         ]
 
+    def videos(self, query: str, **kwargs: Any) -> list[dict[str, Any]]:
+        self.calls.append(("videos", query, kwargs))
+        backend = str(kwargs.get("backend", "youtube"))
+        if error := self.video_errors_by_backend.get(backend):
+            raise error
+        return list(self.video_responses_by_backend.get(backend, []))
+
 
 @pytest.mark.anyio
 async def test_search_client_routes_modes(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -112,17 +133,27 @@ async def test_search_client_routes_modes(monkeypatch: pytest.MonkeyPatch) -> No
     news_results = await client.search("news", "hello", settings)
     wiki_results = await client.search("wiki", "hello", settings)
     image_results = await client.search("images", "hello", settings)
+    video_results = await client.search("videos", "hello", settings)
 
     assert text_results[0].url == "https://example.com"
     assert news_results[0].url == "https://ddgnews.example"
     assert wiki_results[0].url == "https://wikipedia.org/wiki/Test"
     assert image_results[0].image_url == "https://img.example/1.jpg"
+    assert video_results[0].url == "https://youtube.com/watch?v=abc123"
+    assert video_results[0].image_url == "https://img.example/v-small.jpg"
 
-    assert [call[0] for call in fake.calls] == ["text", "news", "text", "images"]
+    assert [call[0] for call in fake.calls] == [
+        "text",
+        "news",
+        "text",
+        "images",
+        "videos",
+    ]
     assert fake.calls[0][2]["backend"] == "duckduckgo"
     assert fake.calls[1][2]["backend"] == "duckduckgo"
     assert fake.calls[2][2]["backend"] == "wikipedia"
     assert fake.calls[3][2]["backend"] == "duckduckgo"
+    assert fake.calls[4][2]["backend"] == "youtube"
 
 
 @pytest.mark.anyio
@@ -178,6 +209,7 @@ async def test_search_client_uses_configured_backends(
         bot_search_backend_news="yahoo",
         bot_search_backend_wiki="wikipedia",
         bot_search_backend_images="duckduckgo",
+        bot_search_backend_videos="youtube",
         bot_search_backend_search_order=("google",),
         bot_search_backend_news_order=("yahoo",),
     )
@@ -186,11 +218,13 @@ async def test_search_client_uses_configured_backends(
     await client.search("news", "hello", settings)
     await client.search("wiki", "hello", settings)
     await client.search("images", "hello", settings)
+    await client.search("videos", "hello", settings)
 
     assert fake.calls[0][2]["backend"] == "google"
     assert fake.calls[1][2]["backend"] == "yahoo"
     assert fake.calls[2][2]["backend"] == "wikipedia"
     assert fake.calls[3][2]["backend"] == "duckduckgo"
+    assert fake.calls[4][2]["backend"] == "youtube"
 
 
 @pytest.mark.anyio
@@ -326,3 +360,89 @@ async def test_search_client_aggregate_raises_error_when_all_backends_fail_or_em
 
     with pytest.raises(SearchError):
         await client.search("search", "hello", settings)
+
+
+@pytest.mark.anyio
+async def test_search_client_video_empty_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeDDGS()
+    fake.video_responses_by_backend = {"youtube": []}
+    monkeypatch.setattr("signal_bot_orx.search_client.DDGS", lambda **_: fake)
+    client = SearchClient()
+
+    with pytest.raises(SearchError) as exc:
+        await client.search("videos", "hello", _settings())
+
+    assert exc.value.user_message == "No search results found."
+
+
+@pytest.mark.anyio
+async def test_search_client_video_uses_images_list_index_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeDDGS()
+    fake.video_responses_by_backend = {
+        "youtube": [
+            {
+                "title": "Video",
+                "content": "https://youtube.com/watch?v=abc123",
+                "images": [
+                    "https://img.example/list-0.jpg",
+                    "https://img.example/list-1.jpg",
+                ],
+            }
+        ]
+    }
+    monkeypatch.setattr("signal_bot_orx.search_client.DDGS", lambda **_: fake)
+    client = SearchClient()
+
+    results = await client.search("videos", "hello", _settings())
+
+    assert results[0].image_url == "https://img.example/list-0.jpg"
+
+
+@pytest.mark.anyio
+async def test_search_client_video_falls_back_to_images_one_then_thumbnail_field(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeDDGS()
+    fake.video_responses_by_backend = {
+        "youtube": [
+            {
+                "title": "Video",
+                "content": "https://youtube.com/watch?v=abc123",
+                "images": {"1": "https://img.example/large.jpg"},
+                "thumbnail_url": "https://img.example/thumb-url.jpg",
+            }
+        ]
+    }
+    monkeypatch.setattr("signal_bot_orx.search_client.DDGS", lambda **_: fake)
+    client = SearchClient()
+
+    results = await client.search("videos", "hello", _settings())
+
+    assert results[0].image_url == "https://img.example/large.jpg"
+
+
+@pytest.mark.anyio
+async def test_search_client_video_allows_missing_thumbnail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeDDGS()
+    fake.video_responses_by_backend = {
+        "youtube": [
+            {
+                "title": "Video",
+                "content": "https://youtube.com/watch?v=abc123",
+                "images": {"0": "not-a-url"},
+            }
+        ]
+    }
+    monkeypatch.setattr("signal_bot_orx.search_client.DDGS", lambda **_: fake)
+    client = SearchClient()
+
+    results = await client.search("videos", "hello", _settings())
+
+    assert results[0].url == "https://youtube.com/watch?v=abc123"
+    assert results[0].image_url is None

@@ -47,6 +47,7 @@ BOT_SEARCH_MODE_SEARCH_ENABLED=true
 BOT_SEARCH_MODE_NEWS_ENABLED=true
 BOT_SEARCH_MODE_WIKI_ENABLED=true
 BOT_SEARCH_MODE_IMAGES_ENABLED=true
+BOT_SEARCH_MODE_VIDEOS_ENABLED=true
 BOT_SEARCH_DEBUG_LOGGING=false
 BOT_SEARCH_PERSONA_ENABLED=false
 BOT_SEARCH_USE_HISTORY_FOR_SUMMARY=false
@@ -59,10 +60,12 @@ BOT_SEARCH_BACKEND_SEARCH=auto
 BOT_SEARCH_BACKEND_NEWS=auto
 BOT_SEARCH_BACKEND_WIKI=wikipedia
 BOT_SEARCH_BACKEND_IMAGES=duckduckgo
+BOT_SEARCH_BACKEND_VIDEOS=youtube
 BOT_SEARCH_TEXT_MAX_RESULTS=5
 BOT_SEARCH_NEWS_MAX_RESULTS=5
 BOT_SEARCH_WIKI_MAX_RESULTS=3
 BOT_SEARCH_IMAGES_MAX_RESULTS=3
+BOT_SEARCH_VIDEOS_MAX_RESULTS=5
 BOT_SEARCH_TIMEOUT_SECONDS=8
 BOT_SEARCH_SOURCE_TTL_SECONDS=1800
 ```
@@ -70,6 +73,7 @@ BOT_SEARCH_SOURCE_TTL_SECONDS=1800
 Notes:
 - `BOT_SEARCH_CONTEXT_MODE=no_context` (default) means DDGS is command-only.
 - Set `BOT_SEARCH_CONTEXT_MODE=context` to enable auto-search routing from normal chat.
+- `/videos` stays command-only and is not selected by auto-search routing.
 - In `context` mode, ambiguous follow-ups can trigger `Who are you referring to?`; a short next reply can be used to continue the pending search intent.
 - Toggle any explicit DDGS command with `BOT_SEARCH_MODE_*_ENABLED`.
 - `BOT_SEARCH_DEBUG_LOGGING=true` logs router/summarizer decision metadata (without raw message text/results) for diagnostics.
@@ -133,6 +137,13 @@ Explicit search commands:
 /news latest AI policy headlines
 /wiki Alan Turing
 /images moonlit forest
+/videos nick land interview
+```
+
+Video selection follow-up:
+
+```text
+2
 ```
 
 Source lookup:

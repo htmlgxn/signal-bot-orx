@@ -44,6 +44,7 @@ def clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "BOT_SEARCH_MODE_NEWS_ENABLED",
         "BOT_SEARCH_MODE_WIKI_ENABLED",
         "BOT_SEARCH_MODE_IMAGES_ENABLED",
+        "BOT_SEARCH_MODE_VIDEOS_ENABLED",
         "BOT_SEARCH_DEBUG_LOGGING",
         "BOT_SEARCH_PERSONA_ENABLED",
         "BOT_SEARCH_USE_HISTORY_FOR_SUMMARY",
@@ -56,10 +57,12 @@ def clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "BOT_SEARCH_BACKEND_NEWS_ORDER",
         "BOT_SEARCH_BACKEND_WIKI",
         "BOT_SEARCH_BACKEND_IMAGES",
+        "BOT_SEARCH_BACKEND_VIDEOS",
         "BOT_SEARCH_TEXT_MAX_RESULTS",
         "BOT_SEARCH_NEWS_MAX_RESULTS",
         "BOT_SEARCH_WIKI_MAX_RESULTS",
         "BOT_SEARCH_IMAGES_MAX_RESULTS",
+        "BOT_SEARCH_VIDEOS_MAX_RESULTS",
         "BOT_SEARCH_TIMEOUT_SECONDS",
         "BOT_SEARCH_SOURCE_TTL_SECONDS",
         "BOT_GROUP_REPLY_MODE",
@@ -324,6 +327,7 @@ def test_settings_search_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.bot_search_mode_news_enabled is True
     assert settings.bot_search_mode_wiki_enabled is True
     assert settings.bot_search_mode_images_enabled is True
+    assert settings.bot_search_mode_videos_enabled is True
     assert settings.bot_search_debug_logging is False
     assert settings.bot_search_persona_enabled is False
     assert settings.bot_search_use_history_for_summary is False
@@ -342,10 +346,12 @@ def test_settings_search_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.bot_search_backend_news_order == ("duckduckgo", "bing", "yahoo")
     assert settings.bot_search_backend_wiki == "wikipedia"
     assert settings.bot_search_backend_images == "duckduckgo"
+    assert settings.bot_search_backend_videos == "youtube"
     assert settings.bot_search_text_max_results == 5
     assert settings.bot_search_news_max_results == 5
     assert settings.bot_search_wiki_max_results == 3
     assert settings.bot_search_images_max_results == 3
+    assert settings.bot_search_videos_max_results == 5
     assert settings.bot_search_timeout_seconds == 8.0
     assert settings.bot_search_source_ttl_seconds == 1800
 
@@ -358,6 +364,7 @@ def test_settings_search_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BOT_SEARCH_MODE_NEWS_ENABLED", "false")
     monkeypatch.setenv("BOT_SEARCH_MODE_WIKI_ENABLED", "false")
     monkeypatch.setenv("BOT_SEARCH_MODE_IMAGES_ENABLED", "false")
+    monkeypatch.setenv("BOT_SEARCH_MODE_VIDEOS_ENABLED", "false")
     monkeypatch.setenv("BOT_SEARCH_DEBUG_LOGGING", "true")
     monkeypatch.setenv("BOT_SEARCH_PERSONA_ENABLED", "true")
     monkeypatch.setenv("BOT_SEARCH_USE_HISTORY_FOR_SUMMARY", "true")
@@ -373,10 +380,12 @@ def test_settings_search_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BOT_SEARCH_BACKEND_NEWS_ORDER", "duckduckgo,bing,yahoo")
     monkeypatch.setenv("BOT_SEARCH_BACKEND_WIKI", "wikipedia")
     monkeypatch.setenv("BOT_SEARCH_BACKEND_IMAGES", "duckduckgo")
+    monkeypatch.setenv("BOT_SEARCH_BACKEND_VIDEOS", "youtube")
     monkeypatch.setenv("BOT_SEARCH_TEXT_MAX_RESULTS", "7")
     monkeypatch.setenv("BOT_SEARCH_NEWS_MAX_RESULTS", "6")
     monkeypatch.setenv("BOT_SEARCH_WIKI_MAX_RESULTS", "4")
     monkeypatch.setenv("BOT_SEARCH_IMAGES_MAX_RESULTS", "2")
+    monkeypatch.setenv("BOT_SEARCH_VIDEOS_MAX_RESULTS", "9")
     monkeypatch.setenv("BOT_SEARCH_TIMEOUT_SECONDS", "12")
     monkeypatch.setenv("BOT_SEARCH_SOURCE_TTL_SECONDS", "900")
 
@@ -388,6 +397,7 @@ def test_settings_search_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.bot_search_mode_news_enabled is False
     assert settings.bot_search_mode_wiki_enabled is False
     assert settings.bot_search_mode_images_enabled is False
+    assert settings.bot_search_mode_videos_enabled is False
     assert settings.bot_search_debug_logging is True
     assert settings.bot_search_persona_enabled is True
     assert settings.bot_search_use_history_for_summary is True
@@ -406,10 +416,12 @@ def test_settings_search_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.bot_search_backend_news_order == ("duckduckgo", "bing", "yahoo")
     assert settings.bot_search_backend_wiki == "wikipedia"
     assert settings.bot_search_backend_images == "duckduckgo"
+    assert settings.bot_search_backend_videos == "youtube"
     assert settings.bot_search_text_max_results == 7
     assert settings.bot_search_news_max_results == 6
     assert settings.bot_search_wiki_max_results == 4
     assert settings.bot_search_images_max_results == 2
+    assert settings.bot_search_videos_max_results == 9
     assert settings.bot_search_timeout_seconds == 12.0
     assert settings.bot_search_source_ttl_seconds == 900
 

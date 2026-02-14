@@ -63,6 +63,7 @@ class Settings:
     bot_search_mode_news_enabled: bool = True
     bot_search_mode_wiki_enabled: bool = True
     bot_search_mode_images_enabled: bool = True
+    bot_search_mode_videos_enabled: bool = True
     bot_search_debug_logging: bool = False
     bot_search_persona_enabled: bool = False
     bot_search_use_history_for_summary: bool = False
@@ -70,6 +71,7 @@ class Settings:
     bot_search_safesearch: Literal["on", "moderate", "off"] = "moderate"
     bot_search_backend_search: str = "auto"
     bot_search_backend_news: str = "auto"
+    bot_search_backend_videos: str = "youtube"
     bot_search_backend_strategy: SearchBackendStrategy = "first_non_empty"
     bot_search_backend_search_order: tuple[str, ...] = (
         "duckduckgo",
@@ -85,6 +87,7 @@ class Settings:
     bot_search_news_max_results: int = 5
     bot_search_wiki_max_results: int = 3
     bot_search_images_max_results: int = 3
+    bot_search_videos_max_results: int = 5
     bot_search_timeout_seconds: float = 8.0
     bot_search_source_ttl_seconds: int = 1800
     bot_group_reply_mode: GroupReplyMode = "group"
@@ -213,9 +216,12 @@ class Settings:
             )
             if os.getenv("BOT_SEARCH_MODE_IMAGES_ENABLED") is not None
             else True,
-            bot_search_debug_logging=_parse_bool(
-                os.getenv("BOT_SEARCH_DEBUG_LOGGING")
+            bot_search_mode_videos_enabled=_parse_bool(
+                os.getenv("BOT_SEARCH_MODE_VIDEOS_ENABLED")
             )
+            if os.getenv("BOT_SEARCH_MODE_VIDEOS_ENABLED") is not None
+            else True,
+            bot_search_debug_logging=_parse_bool(os.getenv("BOT_SEARCH_DEBUG_LOGGING"))
             if os.getenv("BOT_SEARCH_DEBUG_LOGGING") is not None
             else False,
             bot_search_persona_enabled=_parse_bool(
@@ -232,6 +238,10 @@ class Settings:
             bot_search_safesearch=_parse_safesearch(os.getenv("BOT_SEARCH_SAFESEARCH")),
             bot_search_backend_search=backend_search_env,
             bot_search_backend_news=backend_news_env,
+            bot_search_backend_videos=_parse_non_empty_str(
+                os.getenv("BOT_SEARCH_BACKEND_VIDEOS"),
+                default="youtube",
+            ),
             bot_search_backend_strategy=_parse_search_backend_strategy(
                 os.getenv("BOT_SEARCH_BACKEND_STRATEGY")
             ),
@@ -268,6 +278,9 @@ class Settings:
             ),
             bot_search_images_max_results=int(
                 os.getenv("BOT_SEARCH_IMAGES_MAX_RESULTS", "3")
+            ),
+            bot_search_videos_max_results=int(
+                os.getenv("BOT_SEARCH_VIDEOS_MAX_RESULTS", "5")
             ),
             bot_search_timeout_seconds=float(
                 os.getenv("BOT_SEARCH_TIMEOUT_SECONDS", "8")
@@ -424,8 +437,7 @@ def _resolve_search_backend_order(*, legacy_backend: str) -> tuple[str, ...]:
         if legacy_backend not in _SEARCH_ALLOWED_BACKENDS:
             allowed = ", ".join(sorted(_SEARCH_ALLOWED_BACKENDS))
             raise RuntimeError(
-                "Invalid BOT_SEARCH_BACKEND_SEARCH. "
-                f"Allowed values: {allowed}."
+                f"Invalid BOT_SEARCH_BACKEND_SEARCH. Allowed values: {allowed}."
             )
         return (legacy_backend,)
     return ("duckduckgo", "bing", "google", "yandex", "grokipedia")
@@ -435,15 +447,13 @@ def _resolve_news_backend_order(*, legacy_backend: str) -> tuple[str, ...]:
     if legacy_backend in _NEWS_BLOCKED_BACKENDS:
         blocked = ", ".join(sorted(_NEWS_BLOCKED_BACKENDS))
         raise RuntimeError(
-            "Invalid BOT_SEARCH_BACKEND_NEWS. "
-            f"Blocked values: {blocked}."
+            f"Invalid BOT_SEARCH_BACKEND_NEWS. Blocked values: {blocked}."
         )
     if legacy_backend and legacy_backend != "auto":
         if legacy_backend not in _NEWS_ALLOWED_BACKENDS:
             allowed = ", ".join(sorted(_NEWS_ALLOWED_BACKENDS))
             raise RuntimeError(
-                "Invalid BOT_SEARCH_BACKEND_NEWS. "
-                f"Allowed values: {allowed}."
+                f"Invalid BOT_SEARCH_BACKEND_NEWS. Allowed values: {allowed}."
             )
         return (legacy_backend,)
     return ("duckduckgo", "bing", "yahoo")

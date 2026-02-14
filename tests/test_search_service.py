@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from signal_bot_orx.config import Settings
-from signal_bot_orx.search_client import SearchMode, SearchResult
+from signal_bot_orx.search_client import SearchError, SearchMode, SearchResult
 from signal_bot_orx.search_context import PendingFollowupState, SearchContextStore
 from signal_bot_orx.search_service import (
     FollowupResolutionDecision,
@@ -92,7 +92,9 @@ async def test_decide_auto_search_parses_json() -> None:
 
 
 @pytest.mark.anyio
-async def test_decide_auto_search_router_prompt_includes_person_lookup_examples() -> None:
+async def test_decide_auto_search_router_prompt_includes_person_lookup_examples() -> (
+    None
+):
     fake_openrouter = _FakeOpenRouterClient(
         [
             json.dumps(
@@ -235,7 +237,9 @@ async def test_decide_auto_search_logs_router_decision_when_debug_enabled(
     )
     caplog.set_level(logging.INFO, logger="signal_bot_orx.search_service")
 
-    decision = await service.decide_auto_search("what happened with openrouter this week?")
+    decision = await service.decide_auto_search(
+        "what happened with openrouter this week?"
+    )
 
     assert decision.mode == "news"
     assert any(
@@ -424,7 +428,9 @@ async def test_resolve_followup_prompt_clarifies_on_malformed_json() -> None:
 
 
 @pytest.mark.anyio
-async def test_resolve_followup_prompt_deterministic_subject_preserves_qualifier() -> None:
+async def test_resolve_followup_prompt_deterministic_subject_preserves_qualifier() -> (
+    None
+):
     fake_openrouter = _FakeOpenRouterClient(["unused"])
     service = SearchService(
         settings=_settings(),
@@ -453,7 +459,9 @@ async def test_resolve_followup_prompt_deterministic_subject_preserves_qualifier
 
 
 @pytest.mark.anyio
-async def test_resolve_followup_prompt_clarifies_with_multiple_subject_candidates() -> None:
+async def test_resolve_followup_prompt_clarifies_with_multiple_subject_candidates() -> (
+    None
+):
     service = SearchService(
         settings=_settings(),
         search_client=_FakeSearchClient([]),
@@ -673,7 +681,9 @@ async def test_summarize_search_persona_enabled_includes_core_prompt() -> None:
 
 
 @pytest.mark.anyio
-async def test_summarize_search_persona_enabled_matches_auto_and_command_paths() -> None:
+async def test_summarize_search_persona_enabled_matches_auto_and_command_paths() -> (
+    None
+):
     results = [
         SearchResult(
             mode="search",
@@ -893,3 +903,159 @@ async def test_search_image_downloads_first_valid_image() -> None:
 
     assert image_bytes == b"image-bytes"
     assert content_type == "image/jpeg"
+
+
+@pytest.mark.anyio
+async def test_video_list_reply_stores_pending_selection() -> None:
+    results = [
+        SearchResult(
+            mode="videos",
+            title="Video one",
+            url="https://youtube.com/watch?v=one",
+            snippet="",
+            image_url="https://img.example/one.jpg",
+        ),
+        SearchResult(
+            mode="videos",
+            title="Video two",
+            url="https://youtube.com/watch?v=two",
+            snippet="",
+            image_url="https://img.example/two.jpg",
+        ),
+    ]
+    context = SearchContextStore(ttl_seconds=60)
+    service = SearchService(
+        settings=_settings(),
+        search_client=_FakeSearchClient(results),
+        search_context=context,
+        openrouter_client=_FakeOpenRouterClient([]),
+        http_client=httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda _: httpx.Response(200))
+        ),
+    )
+
+    reply = await service.video_list_reply(
+        conversation_key="dm:+15550002222",
+        query="nick land interview",
+    )
+    pending = service.get_pending_video_selection_state(
+        conversation_key="dm:+15550002222",
+    )
+
+    assert "Videos:" in reply
+    assert "1. Video one" in reply
+    assert pending is not None
+    assert len(pending.results) == 2
+
+
+@pytest.mark.anyio
+async def test_resolve_video_selection_downloads_thumbnail() -> None:
+    results = [
+        SearchResult(
+            mode="videos",
+            title="Video one",
+            url="https://youtube.com/watch?v=one",
+            snippet="",
+            image_url="https://img.example/one.jpg",
+        )
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://img.example/one.jpg"
+        return httpx.Response(
+            200,
+            content=b"thumb-bytes",
+            headers={"content-type": "image/jpeg"},
+        )
+
+    service = SearchService(
+        settings=_settings(),
+        search_client=_FakeSearchClient(results),
+        search_context=SearchContextStore(ttl_seconds=60),
+        openrouter_client=_FakeOpenRouterClient([]),
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    await service.video_list_reply(
+        conversation_key="dm:+15550002222",
+        query="nick land interview",
+    )
+    image_bytes, content_type, url, title = await service.resolve_video_selection(
+        conversation_key="dm:+15550002222",
+        selection_number=1,
+    )
+
+    assert image_bytes == b"thumb-bytes"
+    assert content_type == "image/jpeg"
+    assert url == "https://youtube.com/watch?v=one"
+    assert title == "Video one"
+
+
+@pytest.mark.anyio
+async def test_resolve_video_selection_rejects_out_of_range() -> None:
+    results = [
+        SearchResult(
+            mode="videos",
+            title="Video one",
+            url="https://youtube.com/watch?v=one",
+            snippet="",
+            image_url="https://img.example/one.jpg",
+        )
+    ]
+    service = SearchService(
+        settings=_settings(),
+        search_client=_FakeSearchClient(results),
+        search_context=SearchContextStore(ttl_seconds=60),
+        openrouter_client=_FakeOpenRouterClient([]),
+        http_client=httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda _: httpx.Response(200))
+        ),
+    )
+    await service.video_list_reply(
+        conversation_key="dm:+15550002222",
+        query="nick land interview",
+    )
+
+    with pytest.raises(SearchError) as exc:
+        await service.resolve_video_selection(
+            conversation_key="dm:+15550002222",
+            selection_number=2,
+        )
+
+    assert "between 1 and 1" in str(exc.value)
+
+
+@pytest.mark.anyio
+async def test_resolve_video_selection_returns_text_fallback_when_no_thumbnail() -> None:
+    results = [
+        SearchResult(
+            mode="videos",
+            title="Video one",
+            url="https://youtube.com/watch?v=one",
+            snippet="",
+            image_url=None,
+        )
+    ]
+    service = SearchService(
+        settings=_settings(),
+        search_client=_FakeSearchClient(results),
+        search_context=SearchContextStore(ttl_seconds=60),
+        openrouter_client=_FakeOpenRouterClient([]),
+        http_client=httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda _: httpx.Response(200))
+        ),
+    )
+    await service.video_list_reply(
+        conversation_key="dm:+15550002222",
+        query="nick land interview",
+    )
+
+    image_bytes, content_type, url, title = await service.resolve_video_selection(
+        conversation_key="dm:+15550002222",
+        selection_number=1,
+    )
+
+    assert image_bytes is None
+    assert content_type is None
+    assert url == "https://youtube.com/watch?v=one"
+    assert title == "Video one"

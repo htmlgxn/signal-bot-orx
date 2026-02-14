@@ -12,7 +12,11 @@ from signal_bot_orx.chat_prompt import coerce_plain_text_reply
 from signal_bot_orx.config import Settings
 from signal_bot_orx.openrouter_client import ChatReplyError
 from signal_bot_orx.search_client import SearchError, SearchMode, SearchResult
-from signal_bot_orx.search_context import PendingFollowupState, SearchContextStore
+from signal_bot_orx.search_context import (
+    PendingFollowupState,
+    PendingVideoSelectionState,
+    SearchContextStore,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -314,9 +318,7 @@ class SearchService:
                 {
                     "mode": item.mode,
                     "title": _sanitize_context_fragment(item.title, max_chars=120),
-                    "snippet": _sanitize_context_fragment(
-                        item.snippet, max_chars=180
-                    ),
+                    "snippet": _sanitize_context_fragment(item.snippet, max_chars=180),
                 }
             )
         return source_context
@@ -356,6 +358,20 @@ class SearchService:
         conversation_key: str,
     ) -> int:
         return self._search_context.bump_pending_attempt(conversation_key)
+
+    def get_pending_video_selection_state(
+        self,
+        *,
+        conversation_key: str,
+    ) -> PendingVideoSelectionState | None:
+        return self._search_context.get_pending_video_selection(conversation_key)
+
+    def clear_pending_video_selection_state(
+        self,
+        *,
+        conversation_key: str,
+    ) -> None:
+        self._search_context.clear_pending_video_selection(conversation_key)
 
     async def resolve_followup_prompt(
         self,
@@ -720,7 +736,7 @@ class SearchService:
                 continue
             try:
                 response = await self._http_client.get(image_url, timeout=timeout)
-            except (httpx.TimeoutException, httpx.NetworkError):
+            except httpx.TimeoutException, httpx.NetworkError:
                 continue
 
             if response.status_code >= 400 or not response.content:
@@ -742,6 +758,63 @@ class SearchService:
                 f"Try opening this source: {first_source}"
             )
         raise SearchError("I found images but could not download one right now.")
+
+    async def video_list_reply(
+        self,
+        *,
+        conversation_key: str,
+        query: str,
+    ) -> str:
+        results = await self._search_client.search("videos", query, self._settings)
+        self._search_context.set_pending_video_selection(
+            conversation_key,
+            query=query,
+            results=results,
+        )
+        lines = ["Videos:"]
+        for index, result in enumerate(results, start=1):
+            lines.append(f"{index}. {result.title}")
+        lines.append("Reply with a number to send the thumbnail and URL.")
+        return "\n".join(lines)
+
+    async def resolve_video_selection(
+        self,
+        *,
+        conversation_key: str,
+        selection_number: int,
+    ) -> tuple[bytes | None, str | None, str, str]:
+        pending = self._search_context.get_pending_video_selection(conversation_key)
+        if pending is None or not pending.results:
+            raise SearchError("No pending video results. Run /videos <query> first.")
+
+        if selection_number < 1 or selection_number > len(pending.results):
+            raise SearchError(
+                f"Please choose a number between 1 and {len(pending.results)}."
+            )
+
+        selected = pending.results[selection_number - 1]
+        thumbnail_url = (selected.thumbnail_url or "").strip()
+        if not thumbnail_url or not thumbnail_url.startswith(("http://", "https://")):
+            return None, None, selected.url, selected.title
+
+        timeout = max(1.0, float(self._settings.bot_search_timeout_seconds))
+        try:
+            response = await self._http_client.get(thumbnail_url, timeout=timeout)
+        except httpx.TimeoutException, httpx.NetworkError:
+            return None, None, selected.url, selected.title
+
+        if response.status_code >= 400 or not response.content:
+            return None, None, selected.url, selected.title
+
+        content_type = (
+            response.headers.get("content-type", "image/jpeg")
+            .split(";", maxsplit=1)[0]
+            .strip()
+        )
+        if not content_type.startswith("image/"):
+            return None, None, selected.url, selected.title
+
+        return response.content, content_type, selected.url, selected.title
 
     def source_reply(self, *, conversation_key: str, claim: str) -> str:
         matches = self._search_context.find_sources(
@@ -922,7 +995,9 @@ def _sanitize_history_context(
     cleaned: list[dict[str, str]] = []
     for item in history_context:
         role = str(item.get("role", "")).strip().lower()
-        content = _sanitize_context_fragment(str(item.get("content", "")), max_chars=220)
+        content = _sanitize_context_fragment(
+            str(item.get("content", "")), max_chars=220
+        )
         if role not in {"user", "assistant"} or not content:
             continue
         cleaned.append({"role": role, "content": content})

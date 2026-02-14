@@ -105,7 +105,7 @@ class GroupResolver:
         for url in urls:
             try:
                 response = await self._http_client.get(url, timeout=30)
-            except (httpx.TimeoutException, httpx.NetworkError):
+            except httpx.TimeoutException, httpx.NetworkError:
                 continue
 
             if response.status_code >= 400:
@@ -261,7 +261,7 @@ def _decode_group_suffix(group_suffix: str) -> str | None:
     try:
         decoded = base64.b64decode(normalized + padding, validate=False)
         decoded_text = decoded.decode("utf-8").strip()
-    except (ValueError, UnicodeDecodeError):
+    except ValueError, UnicodeDecodeError:
         return None
 
     if not decoded_text:
