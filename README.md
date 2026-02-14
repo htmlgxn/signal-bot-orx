@@ -8,7 +8,7 @@ Primary behavior:
 - Mention-triggered group chat replies.
 - Direct-message chat replies without mention syntax.
 - DDGS-powered search via slash commands (default privacy mode).
-- Optional `/imagine <prompt>` image generation.
+- Optional `/imagine <prompt>` image generation via OpenRouter.
 
 ## Features
 
