@@ -132,7 +132,7 @@ wheels = [
 [[package]]
 name = "ddgs"
 version = "9.10.0"
-source = { git = "ssh://git@github.com/htmlgxn/ddgs-more.git?rev=2638d08#2638d080ab47a2504056ef412372569c4c6db504" }
+source = { git = "https://github.com/htmlgxn/ddgs-more.git?rev=2638d08#2638d080ab47a2504056ef412372569c4c6db504" }
 dependencies = [
     { name = "click" },
     { name = "fake-useragent" },
@@ -498,7 +498,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "ddgs", git = "ssh://git@github.com/htmlgxn/ddgs-more.git?rev=2638d08" },
+    { name = "ddgs", git = "https://github.com/htmlgxn/ddgs-more.git?rev=2638d08" },
     { name = "fastapi", specifier = ">=0.116.1" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "uvicorn", specifier = ">=0.35.0" },
