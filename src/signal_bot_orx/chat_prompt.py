@@ -10,7 +10,28 @@ _LOCAL_CHAT_PROMPT_PATH = Path(__file__).with_name("chat_system_prompt.md")
 _DEFAULT_CHAT_PROMPT_PATH = Path(__file__).with_name("default_chat_system_prompt.md")
 
 
+def _bootstrap_local_chat_system_prompt() -> None:
+    if _LOCAL_CHAT_PROMPT_PATH.exists():
+        return
+
+    try:
+        default_prompt = _DEFAULT_CHAT_PROMPT_PATH.read_text(encoding="utf-8").strip()
+    except OSError:
+        return
+
+    if not default_prompt:
+        return
+
+    try:
+        _LOCAL_CHAT_PROMPT_PATH.write_text(f"{default_prompt}\n", encoding="utf-8")
+    except OSError:
+        # Keep startup resilient if local write is unavailable.
+        return
+
+
 def _load_default_chat_system_prompt() -> str:
+    _bootstrap_local_chat_system_prompt()
+
     for candidate in (_LOCAL_CHAT_PROMPT_PATH, _DEFAULT_CHAT_PROMPT_PATH):
         try:
             content = candidate.read_text(encoding="utf-8").strip()
