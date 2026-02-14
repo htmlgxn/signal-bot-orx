@@ -52,6 +52,8 @@ BOT_SEARCH_PERSONA_ENABLED=false
 BOT_SEARCH_USE_HISTORY_FOR_SUMMARY=false
 BOT_SEARCH_REGION=us-en
 BOT_SEARCH_SAFESEARCH=moderate
+BOT_SEARCH_BACKEND_SEARCH_ORDER=duckduckgo,bing,google,yandex,grokipedia
+BOT_SEARCH_BACKEND_NEWS_ORDER=duckduckgo,bing,yahoo
 BOT_SEARCH_BACKEND_SEARCH=auto
 BOT_SEARCH_BACKEND_NEWS=auto
 BOT_SEARCH_BACKEND_WIKI=wikipedia
@@ -70,7 +72,10 @@ Notes:
 - In `context` mode, ambiguous follow-ups can trigger `Who are you referring to?`; a short next reply can be used to continue the pending search intent.
 - Toggle any explicit DDGS command with `BOT_SEARCH_MODE_*_ENABLED`.
 - `BOT_SEARCH_DEBUG_LOGGING=true` logs router/summarizer decision metadata (without raw message text/results) for diagnostics.
-- `BOT_SEARCH_BACKEND_*` values are passed directly to DDGS per mode.
+- `BOT_SEARCH_BACKEND_*_ORDER` defines fallback chains for general `search` and `news`.
+- If an order var is set, it overrides the legacy single-backend var for that mode.
+- `/wiki` stays explicit encyclopedia mode via `BOT_SEARCH_BACKEND_WIKI`.
+- News backend order blocks encyclopedia backends (`wikipedia`, `grokipedia`).
 - `BOT_SEARCH_PERSONA_ENABLED=true` reuses the core chat personality for search summaries.
 - `BOT_SEARCH_USE_HISTORY_FOR_SUMMARY=true` includes up to the last 2 turns in the summary prompt.
 - File-based prompt behavior:

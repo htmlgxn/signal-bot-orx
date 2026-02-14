@@ -51,6 +51,8 @@ def clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "BOT_SEARCH_SAFESEARCH",
         "BOT_SEARCH_BACKEND_SEARCH",
         "BOT_SEARCH_BACKEND_NEWS",
+        "BOT_SEARCH_BACKEND_SEARCH_ORDER",
+        "BOT_SEARCH_BACKEND_NEWS_ORDER",
         "BOT_SEARCH_BACKEND_WIKI",
         "BOT_SEARCH_BACKEND_IMAGES",
         "BOT_SEARCH_TEXT_MAX_RESULTS",
@@ -328,6 +330,14 @@ def test_settings_search_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.bot_search_safesearch == "moderate"
     assert settings.bot_search_backend_search == "auto"
     assert settings.bot_search_backend_news == "auto"
+    assert settings.bot_search_backend_search_order == (
+        "duckduckgo",
+        "bing",
+        "google",
+        "yandex",
+        "grokipedia",
+    )
+    assert settings.bot_search_backend_news_order == ("duckduckgo", "bing", "yahoo")
     assert settings.bot_search_backend_wiki == "wikipedia"
     assert settings.bot_search_backend_images == "duckduckgo"
     assert settings.bot_search_text_max_results == 5
@@ -353,6 +363,11 @@ def test_settings_search_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("BOT_SEARCH_SAFESEARCH", "off")
     monkeypatch.setenv("BOT_SEARCH_BACKEND_SEARCH", "google")
     monkeypatch.setenv("BOT_SEARCH_BACKEND_NEWS", "yahoo")
+    monkeypatch.setenv(
+        "BOT_SEARCH_BACKEND_SEARCH_ORDER",
+        "duckduckgo, bing, google, yandex, grokipedia",
+    )
+    monkeypatch.setenv("BOT_SEARCH_BACKEND_NEWS_ORDER", "duckduckgo,bing,yahoo")
     monkeypatch.setenv("BOT_SEARCH_BACKEND_WIKI", "wikipedia")
     monkeypatch.setenv("BOT_SEARCH_BACKEND_IMAGES", "duckduckgo")
     monkeypatch.setenv("BOT_SEARCH_TEXT_MAX_RESULTS", "7")
@@ -377,6 +392,14 @@ def test_settings_search_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.bot_search_safesearch == "off"
     assert settings.bot_search_backend_search == "google"
     assert settings.bot_search_backend_news == "yahoo"
+    assert settings.bot_search_backend_search_order == (
+        "duckduckgo",
+        "bing",
+        "google",
+        "yandex",
+        "grokipedia",
+    )
+    assert settings.bot_search_backend_news_order == ("duckduckgo", "bing", "yahoo")
     assert settings.bot_search_backend_wiki == "wikipedia"
     assert settings.bot_search_backend_images == "duckduckgo"
     assert settings.bot_search_text_max_results == 7
@@ -407,3 +430,72 @@ def test_settings_search_context_mode_invalid(
         Settings.from_env()
 
     assert "Invalid BOT_SEARCH_CONTEXT_MODE" in str(exc.value)
+
+
+def test_settings_search_backend_order_uses_legacy_single_backend_when_no_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_base_required(monkeypatch)
+    monkeypatch.setenv("BOT_SEARCH_BACKEND_SEARCH", "google")
+    monkeypatch.setenv("BOT_SEARCH_BACKEND_NEWS", "bing")
+
+    settings = Settings.from_env()
+
+    assert settings.bot_search_backend_search_order == ("google",)
+    assert settings.bot_search_backend_news_order == ("bing",)
+
+
+def test_settings_search_backend_order_dedupes_and_normalizes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_base_required(monkeypatch)
+    monkeypatch.setenv(
+        "BOT_SEARCH_BACKEND_SEARCH_ORDER",
+        "DuckDuckGo, bing, duckduckgo, yandex",
+    )
+    monkeypatch.setenv("BOT_SEARCH_BACKEND_NEWS_ORDER", "duckduckgo, yahoo, yahoo")
+
+    settings = Settings.from_env()
+
+    assert settings.bot_search_backend_search_order == (
+        "duckduckgo",
+        "bing",
+        "yandex",
+    )
+    assert settings.bot_search_backend_news_order == ("duckduckgo", "yahoo")
+
+
+def test_settings_search_backend_order_rejects_invalid_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_base_required(monkeypatch)
+    monkeypatch.setenv("BOT_SEARCH_BACKEND_SEARCH_ORDER", "duckduckgo,notreal")
+
+    with pytest.raises(RuntimeError) as exc:
+        Settings.from_env()
+
+    assert "Invalid BOT_SEARCH_BACKEND_SEARCH_ORDER" in str(exc.value)
+
+
+def test_settings_search_backend_news_order_rejects_encyclopedia_backends(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_base_required(monkeypatch)
+    monkeypatch.setenv("BOT_SEARCH_BACKEND_NEWS_ORDER", "duckduckgo,wikipedia")
+
+    with pytest.raises(RuntimeError) as exc:
+        Settings.from_env()
+
+    assert "Invalid BOT_SEARCH_BACKEND_NEWS_ORDER" in str(exc.value)
+
+
+def test_settings_search_backend_news_legacy_rejects_encyclopedia_backends(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_base_required(monkeypatch)
+    monkeypatch.setenv("BOT_SEARCH_BACKEND_NEWS", "grokipedia")
+
+    with pytest.raises(RuntimeError) as exc:
+        Settings.from_env()
+
+    assert "Invalid BOT_SEARCH_BACKEND_NEWS" in str(exc.value)

@@ -86,6 +86,10 @@ Rules:
 - Person/entity identification prompts should usually search:
   - "who is ...", "who's ...", "tell me about ...", "what do you know about ..."
   - default to mode="search" unless explicit news/image/wiki intent is present
+- Civic role and officeholder lookups should usually search:
+  - "who are the councillors of ...", "who is the mayor of ...",
+    "who is the MP/MLA for ..."
+  - default to mode="search" unless the user explicitly asks for recent updates, then use "news"
 - Prefer "search" over "wiki" for creators, influencers, streamers, and ambiguous modern names.
 - query must be concise and searchable.
 - If should_search=false, mode="search" and query="".
@@ -99,6 +103,9 @@ JSON: {"should_search": true, "mode": "news", "query": "OpenRouter this week", "
 
 User: Use Wikipedia to summarize Ada Lovelace.
 JSON: {"should_search": true, "mode": "wiki", "query": "Ada Lovelace", "reason": "explicit_wikipedia_intent"}
+
+User: Who are all the town councillors of Truro, NS?
+JSON: {"should_search": true, "mode": "search", "query": "town councillors Truro NS", "reason": "civic_lookup"}
 """
 
 _SUMMARY_SYSTEM_PROMPT = """Summarize search findings for a chat reply.

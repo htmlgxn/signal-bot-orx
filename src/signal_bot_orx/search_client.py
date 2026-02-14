@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, cast
 
 from ddgs import DDGS
 from ddgs.exceptions import DDGSException, RatelimitException, TimeoutException
@@ -10,6 +11,7 @@ from ddgs.exceptions import DDGSException, RatelimitException, TimeoutException
 from signal_bot_orx.config import Settings
 
 SearchMode = Literal["search", "news", "wiki", "images"]
+logger = logging.getLogger(__name__)
 
 
 class SearchError(Exception):
@@ -63,20 +65,18 @@ class SearchClient:
         with DDGS(timeout=timeout) as ddgs:
             raw_results: list[dict[str, object]]
             if mode == "search":
-                raw_results = ddgs.text(
-                    query,
-                    region=settings.bot_search_region,
-                    safesearch=settings.bot_search_safesearch,
-                    max_results=settings.bot_search_text_max_results,
-                    backend=settings.bot_search_backend_search,
+                raw_results = _search_text_with_fallback(
+                    ddgs=ddgs,
+                    query=query,
+                    settings=settings,
+                    backends=settings.bot_search_backend_search_order,
                 )
             elif mode == "news":
-                raw_results = ddgs.news(
-                    query,
-                    region=settings.bot_search_region,
-                    safesearch=settings.bot_search_safesearch,
-                    max_results=settings.bot_search_news_max_results,
-                    backend=settings.bot_search_backend_news,
+                raw_results = _search_news_with_fallback(
+                    ddgs=ddgs,
+                    query=query,
+                    settings=settings,
+                    backends=settings.bot_search_backend_news_order,
                 )
             elif mode == "wiki":
                 raw_results = ddgs.text(
@@ -154,3 +154,162 @@ def _as_non_empty(value: object) -> str | None:
         if stripped:
             return stripped
     return None
+
+
+def _search_text_with_fallback(
+    *,
+    ddgs: DDGS,
+    query: str,
+    settings: Settings,
+    backends: tuple[str, ...],
+) -> list[dict[str, object]]:
+    last_exception: Exception | None = None
+    attempts = tuple(_dedupe_backends(backends))
+    _debug_log(
+        settings=settings,
+        event="search_backend_chain",
+        mode="search",
+        backend_count=len(attempts),
+    )
+    for backend in attempts:
+        try:
+            raw_results = ddgs.text(
+                query,
+                region=settings.bot_search_region,
+                safesearch=settings.bot_search_safesearch,
+                max_results=settings.bot_search_text_max_results,
+                backend=backend,
+            )
+        except (DDGSException, TimeoutException, RatelimitException) as exc:
+            last_exception = exc
+            _debug_log(
+                settings=settings,
+                event="search_backend_attempt",
+                mode="search",
+                backend=backend,
+                status="error",
+                reason_code=exc.__class__.__name__,
+            )
+            continue
+
+        normalized = _normalize_raw_results(raw_results)
+        _debug_log(
+            settings=settings,
+            event="search_backend_attempt",
+            mode="search",
+            backend=backend,
+            status="ok" if normalized else "empty",
+            result_count=len(normalized),
+        )
+        if normalized:
+            return normalized
+
+    _debug_log(
+        settings=settings,
+        event="search_backend_exhausted",
+        mode="search",
+        backend_count=len(attempts),
+        reason_code=(
+            last_exception.__class__.__name__ if last_exception is not None else "empty"
+        ),
+    )
+    if last_exception is not None:
+        raise last_exception
+    return []
+
+
+def _search_news_with_fallback(
+    *,
+    ddgs: DDGS,
+    query: str,
+    settings: Settings,
+    backends: tuple[str, ...],
+) -> list[dict[str, object]]:
+    last_exception: Exception | None = None
+    attempts = tuple(_dedupe_backends(backends))
+    _debug_log(
+        settings=settings,
+        event="search_backend_chain",
+        mode="news",
+        backend_count=len(attempts),
+    )
+    for backend in attempts:
+        try:
+            raw_results = ddgs.news(
+                query,
+                region=settings.bot_search_region,
+                safesearch=settings.bot_search_safesearch,
+                max_results=settings.bot_search_news_max_results,
+                backend=backend,
+            )
+        except (DDGSException, TimeoutException, RatelimitException) as exc:
+            last_exception = exc
+            _debug_log(
+                settings=settings,
+                event="search_backend_attempt",
+                mode="news",
+                backend=backend,
+                status="error",
+                reason_code=exc.__class__.__name__,
+            )
+            continue
+
+        normalized = _normalize_raw_results(raw_results)
+        _debug_log(
+            settings=settings,
+            event="search_backend_attempt",
+            mode="news",
+            backend=backend,
+            status="ok" if normalized else "empty",
+            result_count=len(normalized),
+        )
+        if normalized:
+            return normalized
+
+    _debug_log(
+        settings=settings,
+        event="search_backend_exhausted",
+        mode="news",
+        backend_count=len(attempts),
+        reason_code=(
+            last_exception.__class__.__name__ if last_exception is not None else "empty"
+        ),
+    )
+    if last_exception is not None:
+        raise last_exception
+    return []
+
+
+def _normalize_raw_results(raw_results: object) -> list[dict[str, object]]:
+    if not isinstance(raw_results, list):
+        return []
+    cleaned: list[dict[str, object]] = []
+    for item in raw_results:
+        if isinstance(item, dict):
+            cleaned.append(cast(dict[str, object], item))
+    return cleaned
+
+
+def _dedupe_backends(backends: tuple[str, ...]) -> tuple[str, ...]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for backend in backends:
+        normalized = backend.strip().lower()
+        if not normalized or normalized in seen:
+            continue
+        ordered.append(normalized)
+        seen.add(normalized)
+    return tuple(ordered)
+
+
+def _debug_log(settings: Settings, event: str, **fields: object) -> None:
+    if not settings.bot_search_debug_logging:
+        return
+    logger.info(
+        "search_backend_debug event=%s %s",
+        event,
+        " ".join(
+            f"{key}={str(value).replace('\n', ' ').strip() or '-'}"
+            for key, value in sorted(fields.items())
+        ),
+    )

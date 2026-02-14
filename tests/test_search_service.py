@@ -122,6 +122,8 @@ async def test_decide_auto_search_router_prompt_includes_person_lookup_examples(
     assert 'JSON: {"should_search": true, "mode": "search"' in router_prompt
     assert 'JSON: {"should_search": true, "mode": "news"' in router_prompt
     assert 'JSON: {"should_search": true, "mode": "wiki"' in router_prompt
+    assert "who are the councillors of" in router_prompt.lower()
+    assert "civic_lookup" in router_prompt
 
 
 @pytest.mark.anyio

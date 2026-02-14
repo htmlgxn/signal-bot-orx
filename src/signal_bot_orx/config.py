@@ -9,6 +9,24 @@ from signal_bot_orx.chat_prompt import DEFAULT_CHAT_SYSTEM_PROMPT
 GroupReplyMode = Literal["group", "dm_fallback"]
 SearchContextMode = Literal["no_context", "context"]
 
+_SEARCH_ALLOWED_BACKENDS = frozenset(
+    {
+        "auto",
+        "all",
+        "bing",
+        "brave",
+        "duckduckgo",
+        "google",
+        "grokipedia",
+        "mojeek",
+        "wikipedia",
+        "yahoo",
+        "yandex",
+    }
+)
+_NEWS_ALLOWED_BACKENDS = frozenset({"auto", "all", "bing", "duckduckgo", "yahoo"})
+_NEWS_BLOCKED_BACKENDS = frozenset({"grokipedia", "wikipedia"})
+
 DEFAULT_OPENROUTER_MODEL = "openai/gpt-4o-mini"
 DEFAULT_MENTION_ALIASES = ("@signalbot", "@bot")
 
@@ -51,6 +69,14 @@ class Settings:
     bot_search_safesearch: Literal["on", "moderate", "off"] = "moderate"
     bot_search_backend_search: str = "auto"
     bot_search_backend_news: str = "auto"
+    bot_search_backend_search_order: tuple[str, ...] = (
+        "duckduckgo",
+        "bing",
+        "google",
+        "yandex",
+        "grokipedia",
+    )
+    bot_search_backend_news_order: tuple[str, ...] = ("duckduckgo", "bing", "yahoo")
     bot_search_backend_wiki: str = "wikipedia"
     bot_search_backend_images: str = "duckduckgo"
     bot_search_text_max_results: int = 5
@@ -97,6 +123,27 @@ class Settings:
         mention_aliases = _split_csv_ordered(os.getenv("BOT_MENTION_ALIASES"))
         if not mention_aliases:
             mention_aliases = DEFAULT_MENTION_ALIASES
+
+        backend_search_env = _parse_non_empty_str(
+            os.getenv("BOT_SEARCH_BACKEND_SEARCH"),
+            default="auto",
+        )
+        backend_news_env = _parse_non_empty_str(
+            os.getenv("BOT_SEARCH_BACKEND_NEWS"),
+            default="auto",
+        )
+        backend_search_order = _parse_backend_order_env(
+            os.getenv("BOT_SEARCH_BACKEND_SEARCH_ORDER"),
+            allowed_backends=_SEARCH_ALLOWED_BACKENDS,
+            blocked_backends=frozenset(),
+            env_name="BOT_SEARCH_BACKEND_SEARCH_ORDER",
+        )
+        backend_news_order = _parse_backend_order_env(
+            os.getenv("BOT_SEARCH_BACKEND_NEWS_ORDER"),
+            allowed_backends=_NEWS_ALLOWED_BACKENDS,
+            blocked_backends=_NEWS_BLOCKED_BACKENDS,
+            env_name="BOT_SEARCH_BACKEND_NEWS_ORDER",
+        )
 
         return cls(
             signal_api_base_url=required["signal_api_base_url"] or "",
@@ -181,13 +228,21 @@ class Settings:
             else False,
             bot_search_region=os.getenv("BOT_SEARCH_REGION", "us-en"),
             bot_search_safesearch=_parse_safesearch(os.getenv("BOT_SEARCH_SAFESEARCH")),
-            bot_search_backend_search=_parse_non_empty_str(
-                os.getenv("BOT_SEARCH_BACKEND_SEARCH"),
-                default="auto",
+            bot_search_backend_search=backend_search_env,
+            bot_search_backend_news=backend_news_env,
+            bot_search_backend_search_order=(
+                backend_search_order
+                if backend_search_order is not None
+                else _resolve_search_backend_order(
+                    legacy_backend=backend_search_env,
+                )
             ),
-            bot_search_backend_news=_parse_non_empty_str(
-                os.getenv("BOT_SEARCH_BACKEND_NEWS"),
-                default="auto",
+            bot_search_backend_news_order=(
+                backend_news_order
+                if backend_news_order is not None
+                else _resolve_news_backend_order(
+                    legacy_backend=backend_news_env,
+                )
             ),
             bot_search_backend_wiki=_parse_non_empty_str(
                 os.getenv("BOT_SEARCH_BACKEND_WIKI"),
@@ -305,6 +360,72 @@ def _parse_non_empty_str(value: str | None, *, default: str) -> str:
     if not stripped:
         return default
     return stripped
+
+
+def _parse_backend_order_env(
+    value: str | None,
+    *,
+    allowed_backends: frozenset[str],
+    blocked_backends: frozenset[str],
+    env_name: str,
+) -> tuple[str, ...] | None:
+    if value is None:
+        return None
+
+    raw_items = [item.strip().lower() for item in value.split(",")]
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for backend in raw_items:
+        if not backend or backend in seen:
+            continue
+        if backend in blocked_backends:
+            blocked = ", ".join(sorted(blocked_backends))
+            raise RuntimeError(
+                f"Invalid {env_name}. Backend '{backend}' is not allowed. "
+                f"Blocked values: {blocked}."
+            )
+        if backend not in allowed_backends:
+            allowed = ", ".join(sorted(allowed_backends))
+            raise RuntimeError(
+                f"Invalid {env_name}. Backend '{backend}' is not recognized. "
+                f"Allowed values: {allowed}."
+            )
+        ordered.append(backend)
+        seen.add(backend)
+
+    if not ordered:
+        return None
+    return tuple(ordered)
+
+
+def _resolve_search_backend_order(*, legacy_backend: str) -> tuple[str, ...]:
+    if legacy_backend and legacy_backend != "auto":
+        if legacy_backend not in _SEARCH_ALLOWED_BACKENDS:
+            allowed = ", ".join(sorted(_SEARCH_ALLOWED_BACKENDS))
+            raise RuntimeError(
+                "Invalid BOT_SEARCH_BACKEND_SEARCH. "
+                f"Allowed values: {allowed}."
+            )
+        return (legacy_backend,)
+    return ("duckduckgo", "bing", "google", "yandex", "grokipedia")
+
+
+def _resolve_news_backend_order(*, legacy_backend: str) -> tuple[str, ...]:
+    if legacy_backend in _NEWS_BLOCKED_BACKENDS:
+        blocked = ", ".join(sorted(_NEWS_BLOCKED_BACKENDS))
+        raise RuntimeError(
+            "Invalid BOT_SEARCH_BACKEND_NEWS. "
+            f"Blocked values: {blocked}."
+        )
+    if legacy_backend and legacy_backend != "auto":
+        if legacy_backend not in _NEWS_ALLOWED_BACKENDS:
+            allowed = ", ".join(sorted(_NEWS_ALLOWED_BACKENDS))
+            raise RuntimeError(
+                "Invalid BOT_SEARCH_BACKEND_NEWS. "
+                f"Allowed values: {allowed}."
+            )
+        return (legacy_backend,)
+    return ("duckduckgo", "bing", "yahoo")
 
 
 def _chat_system_prompt_from_env(value: str | None) -> str:
