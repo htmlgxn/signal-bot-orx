@@ -5,7 +5,7 @@ description = "Webhook-driven Signal bot with mention-triggered OpenRouter chat 
 readme = "README.md"
 requires-python = ">=3.14"
 license = "MIT"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 authors = [
     { name = "Ben Chitty", email = "htmlgxn@pm.me" },
 ]
@@ -23,6 +23,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
+    "ddgs>=9.10.0",
     "fastapi>=0.116.1",
     "httpx>=0.28.1",
     "uvicorn>=0.35.0",

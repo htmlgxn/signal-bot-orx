@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import logging
 from typing import Any, Literal, cast
 
 import httpx
@@ -12,6 +13,10 @@ from signal_bot_orx.chat_context import ChatTurn
 from signal_bot_orx.config import Settings
 from signal_bot_orx.dedupe import DedupeCache
 from signal_bot_orx.group_resolver import ResolvedGroupRecipients
+from signal_bot_orx.search_service import (
+    FollowupResolutionDecision,
+    SearchRouteDecision,
+)
 from signal_bot_orx.signal_client import GroupResolverLike, SignalClient
 from signal_bot_orx.types import (
     IncomingMessage,
@@ -23,6 +28,9 @@ from signal_bot_orx.webhook import (
     WebhookHandler,
     normalize_chat_prompt,
     parse_imagine_prompt,
+    parse_search_command,
+    parse_source_command,
+    parse_source_request_text,
     resolve_reply_target,
     should_handle_chat_mention,
 )
@@ -39,6 +47,25 @@ def test_parse_imagine_prompt_empty() -> None:
 
 def test_parse_imagine_prompt_non_command() -> None:
     assert parse_imagine_prompt("hello world") is None
+
+
+def test_parse_search_command() -> None:
+    assert parse_search_command("/search openrouter") == ("search", "openrouter")
+    assert parse_search_command("/wiki Ada Lovelace") == ("wiki", "Ada Lovelace")
+    assert parse_search_command("/images cats") == ("images", "cats")
+    assert parse_search_command("hello world") is None
+
+
+def test_parse_source_command() -> None:
+    assert parse_source_command("/source") == ""
+    assert parse_source_command("/source claim text") == "claim text"
+    assert parse_source_command("hello world") is None
+
+
+def test_parse_source_request_text() -> None:
+    assert parse_source_request_text("source for that claim") == "that claim"
+    assert parse_source_request_text("where did you get that") == ""
+    assert parse_source_request_text("no source request") is None
 
 
 def test_parse_signal_webhook_common_shape() -> None:
@@ -107,6 +134,14 @@ def test_parse_signal_webhook_json_rpc_missing_message() -> None:
 def _settings(
     *,
     mode: Literal["group", "dm_fallback"],
+    search_context_mode: Literal["no_context", "context"] = "no_context",
+    search_mode_search_enabled: bool = True,
+    search_mode_news_enabled: bool = True,
+    search_mode_wiki_enabled: bool = True,
+    search_mode_images_enabled: bool = True,
+    search_debug_logging: bool = False,
+    search_persona_enabled: bool = False,
+    search_use_history_for_summary: bool = False,
     sender_uuid: str | None = None,
     system_prompt: str | None = None,
     force_plain_text: bool = True,
@@ -123,6 +158,14 @@ def _settings(
         openrouter_model="openai/gpt-4o-mini",
         openrouter_image_api_key=image_api_key,
         openrouter_image_model=image_model,
+        bot_search_context_mode=search_context_mode,
+        bot_search_mode_search_enabled=search_mode_search_enabled,
+        bot_search_mode_news_enabled=search_mode_news_enabled,
+        bot_search_mode_wiki_enabled=search_mode_wiki_enabled,
+        bot_search_mode_images_enabled=search_mode_images_enabled,
+        bot_search_debug_logging=search_debug_logging,
+        bot_search_persona_enabled=search_persona_enabled,
+        bot_search_use_history_for_summary=search_use_history_for_summary,
         bot_group_reply_mode=mode,
         bot_chat_system_prompt=system_prompt or "default system prompt",
         bot_chat_force_plain_text=force_plain_text,
@@ -284,6 +327,8 @@ class _FakeChatContextStore:
 
     def get_history(self, _: str) -> tuple[ChatTurn, ...]:
         return (
+            ChatTurn(role="user", content="older question"),
+            ChatTurn(role="assistant", content="older answer"),
             ChatTurn(role="user", content="previous question"),
             ChatTurn(role="assistant", content="previous answer"),
         )
@@ -296,6 +341,163 @@ class _FakeChatContextStore:
         assistant_text: str,
     ) -> None:
         self.appended.append((conversation_key, user_text, assistant_text))
+
+
+class _FakeSearchService:
+    def __init__(
+        self,
+        *,
+        decision: SearchRouteDecision | None = None,
+        followup_resolution: FollowupResolutionDecision | None = None,
+        pending_reply_resolution: FollowupResolutionDecision | None = None,
+        source_context: list[dict[str, str]] | None = None,
+        summary: str = "search-summary",
+        source_text: str = "Sources:\n1. Example - https://example.com",
+    ) -> None:
+        self._decision = decision or SearchRouteDecision(False, "search", "")
+        self._followup_resolution = followup_resolution
+        self._pending_reply_resolution = pending_reply_resolution
+        self._source_context = source_context or []
+        self._summary = summary
+        self._source_text = source_text
+        self._pending_state: dict[str, dict[str, object]] = {}
+        self.decide_prompts: list[str] = []
+        self.followup_calls: list[dict[str, object]] = []
+        self.pending_reply_calls: list[dict[str, object]] = []
+        self.search_calls: list[tuple[str, str]] = []
+        self.search_user_requests: list[str | None] = []
+        self.search_history_contexts: list[list[dict[str, str]] | None] = []
+        self.image_calls: list[str] = []
+        self.source_calls: list[str] = []
+
+    async def decide_auto_search(self, prompt: str) -> SearchRouteDecision:
+        self.decide_prompts.append(prompt)
+        return self._decision
+
+    async def resolve_followup_prompt(
+        self,
+        *,
+        prompt: str,
+        history_context: list[dict[str, str]] | None,
+        source_context: list[dict[str, str]] | None,
+    ) -> FollowupResolutionDecision:
+        self.followup_calls.append(
+            {
+                "prompt": prompt,
+                "history_context": history_context,
+                "source_context": source_context,
+            }
+        )
+        if self._followup_resolution is not None:
+            return self._followup_resolution
+        return FollowupResolutionDecision(
+            resolved_prompt=prompt,
+            needs_clarification=False,
+            clarification_text=None,
+            reason="not_followup",
+            used_context=False,
+            confidence=1.0,
+            subject_hint=None,
+        )
+
+    async def resolve_pending_followup_reply(
+        self,
+        *,
+        reply_prompt: str,
+        pending_state: object,
+        history_context: list[dict[str, str]] | None,
+        source_context: list[dict[str, str]] | None,
+    ) -> FollowupResolutionDecision:
+        self.pending_reply_calls.append(
+            {
+                "reply_prompt": reply_prompt,
+                "pending_state": pending_state,
+                "history_context": history_context,
+                "source_context": source_context,
+            }
+        )
+        if self._pending_reply_resolution is not None:
+            return self._pending_reply_resolution
+        if self._followup_resolution is not None:
+            return self._followup_resolution
+        return FollowupResolutionDecision(
+            resolved_prompt=reply_prompt,
+            needs_clarification=False,
+            clarification_text=None,
+            reason="pending_reply_deterministic",
+            used_context=False,
+            confidence=1.0,
+            subject_hint=reply_prompt,
+        )
+
+    def recent_source_context(
+        self,
+        *,
+        conversation_key: str,
+        limit: int = 6,
+    ) -> list[dict[str, str]]:
+        del conversation_key, limit
+        return list(self._source_context)
+
+    def get_pending_followup_state(self, *, conversation_key: str) -> object | None:
+        return self._pending_state.get(conversation_key)
+
+    def set_pending_followup_state(
+        self,
+        *,
+        conversation_key: str,
+        original_prompt: str,
+        template_prompt: str,
+        reason: str,
+    ) -> None:
+        self._pending_state[conversation_key] = {
+            "original_prompt": original_prompt,
+            "template_prompt": template_prompt,
+            "reason": reason,
+            "attempts": 0,
+        }
+
+    def clear_pending_followup_state(self, *, conversation_key: str) -> None:
+        self._pending_state.pop(conversation_key, None)
+
+    def bump_pending_followup_attempt(self, *, conversation_key: str) -> int:
+        pending = self._pending_state.get(conversation_key)
+        if pending is None:
+            return 0
+        current_attempts = pending.get("attempts", 0)
+        attempts = current_attempts + 1 if isinstance(current_attempts, int) else 1
+        pending["attempts"] = attempts
+        return attempts
+
+    async def summarize_search(
+        self,
+        *,
+        conversation_key: str,
+        mode: str,
+        query: str,
+        user_request: str | None = None,
+        history_context: list[dict[str, str]] | None = None,
+    ) -> str:
+        del conversation_key
+        self.search_calls.append((mode, query))
+        self.search_user_requests.append(user_request)
+        self.search_history_contexts.append(history_context)
+        return self._summary
+
+    async def search_image(
+        self,
+        *,
+        conversation_key: str,
+        query: str,
+    ) -> tuple[bytes, str]:
+        del conversation_key
+        self.image_calls.append(query)
+        return b"image", "image/png"
+
+    def source_reply(self, *, conversation_key: str, claim: str) -> str:
+        del conversation_key
+        self.source_calls.append(claim)
+        return self._source_text
 
 
 class _StaticGroupResolver:
@@ -417,6 +619,741 @@ async def test_handle_webhook_dm_without_mention_triggers_chat_reply() -> None:
     assert fake_openrouter.seen_messages
     assert fake_openrouter.seen_messages[0][0]["content"] == "custom system prompt"
     assert fake_context.appended
+
+
+@pytest.mark.anyio
+async def test_handle_webhook_search_command_queues_summary() -> None:
+    payload = {
+        "envelope": {
+            "sourceNumber": "+15550002222",
+            "timestamp": 1730000000001,
+            "dataMessage": {
+                "message": "/search latest openrouter news",
+                "timestamp": 1730000000001,
+            },
+        }
+    }
+    fake_signal = _FakeSignalClient()
+    fake_search = _FakeSearchService(summary="summary-only")
+    handler = WebhookHandler(
+        settings=_settings(mode="group"),
+        signal_client=cast(Any, fake_signal),
+        openrouter_client=cast(Any, _FakeOpenRouterClient()),
+        chat_context=cast(Any, _FakeChatContextStore()),
+        openrouter_image_client=None,
+        dedupe=DedupeCache(ttl_seconds=60),
+        search_service=cast(Any, fake_search),
+    )
+
+    background_tasks = BackgroundTasks()
+    response = await handler.handle_webhook(payload, background_tasks)
+    await _run_background_tasks(background_tasks)
+
+    assert response == {"status": "accepted", "reason": "search_queued"}
+    assert fake_search.followup_calls == []
+    assert fake_search.search_calls == [("search", "latest openrouter news")]
+    assert fake_search.search_user_requests == [None]
+    assert fake_search.search_history_contexts == [None]
+    assert fake_signal.text_messages == ["summary-only"]
+
+
+@pytest.mark.anyio
+async def test_handle_webhook_explicit_search_command_clears_pending_followup() -> None:
+    payload = {
+        "envelope": {
+            "sourceNumber": "+15550002222",
+            "timestamp": 1730000000001,
+            "dataMessage": {
+                "message": "/search latest openrouter news",
+                "timestamp": 1730000000001,
+            },
+        }
+    }
+    fake_signal = _FakeSignalClient()
+    fake_search = _FakeSearchService(summary="summary-only")
+    fake_search.set_pending_followup_state(
+        conversation_key="dm:+15550002222",
+        original_prompt="who is he in islam",
+        template_prompt="who is {subject} in islam",
+        reason="low_confidence",
+    )
+    handler = WebhookHandler(
+        settings=_settings(mode="group"),
+        signal_client=cast(Any, fake_signal),
+        openrouter_client=cast(Any, _FakeOpenRouterClient()),
+        chat_context=cast(Any, _FakeChatContextStore()),
+        openrouter_image_client=None,
+        dedupe=DedupeCache(ttl_seconds=60),
+        search_service=cast(Any, fake_search),
+    )
+
+    background_tasks = BackgroundTasks()
+    await handler.handle_webhook(payload, background_tasks)
+    await _run_background_tasks(background_tasks)
+
+    assert fake_search.get_pending_followup_state(
+        conversation_key="dm:+15550002222"
+    ) is None
+
+
+@pytest.mark.anyio
+async def test_handle_webhook_search_command_logs_route_debug(caplog: pytest.LogCaptureFixture) -> None:
+    payload = {
+        "envelope": {
+            "sourceNumber": "+15550002222",
+            "timestamp": 1730000000001,
+            "dataMessage": {
+                "message": "/search latest openrouter news",
+                "timestamp": 1730000000001,
+            },
+        }
+    }
+    fake_signal = _FakeSignalClient()
+    fake_search = _FakeSearchService(summary="summary-only")
+    handler = WebhookHandler(
+        settings=_settings(mode="group", search_debug_logging=True),
+        signal_client=cast(Any, fake_signal),
+        openrouter_client=cast(Any, _FakeOpenRouterClient()),
+        chat_context=cast(Any, _FakeChatContextStore()),
+        openrouter_image_client=None,
+        dedupe=DedupeCache(ttl_seconds=60),
+        search_service=cast(Any, fake_search),
+    )
+    caplog.set_level(logging.INFO, logger="signal_bot_orx.webhook")
+
+    background_tasks = BackgroundTasks()
+    await handler.handle_webhook(payload, background_tasks)
+    await _run_background_tasks(background_tasks)
+
+    assert any(
+        "search_route_debug" in record.getMessage()
+        and "slash_command=/search" in record.getMessage()
+        and "final_path=search_summary" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+@pytest.mark.anyio
+async def test_handle_webhook_search_command_mode_disabled() -> None:
+    payload = {
+        "envelope": {
+            "sourceNumber": "+15550002222",
+            "timestamp": 1730000000001,
+            "dataMessage": {
+                "message": "/search latest openrouter news",
+                "timestamp": 1730000000001,
+            },
+        }
+    }
+    fake_signal = _FakeSignalClient()
+    fake_search = _FakeSearchService(summary="summary-only")
+    handler = WebhookHandler(
+        settings=_settings(mode="group", search_mode_search_enabled=False),
+        signal_client=cast(Any, fake_signal),
+        openrouter_client=cast(Any, _FakeOpenRouterClient()),
+        chat_context=cast(Any, _FakeChatContextStore()),
+        openrouter_image_client=None,
+        dedupe=DedupeCache(ttl_seconds=60),
+        search_service=cast(Any, fake_search),
+    )
+
+    background_tasks = BackgroundTasks()
+    response = await handler.handle_webhook(payload, background_tasks)
+    await _run_background_tasks(background_tasks)
+
+    assert response == {"status": "accepted", "reason": "search_mode_disabled"}
+    assert fake_search.search_calls == []
+    assert fake_signal.text_messages == ["/search is disabled on this bot."]
+
+
+@pytest.mark.anyio
+async def test_handle_webhook_search_command_passes_history_context_when_enabled() -> (
+    None
+):
+    payload = {
+        "envelope": {
+            "sourceNumber": "+15550002222",
+            "timestamp": 1730000000001,
+            "dataMessage": {
+                "message": "/search latest openrouter news",
+                "timestamp": 1730000000001,
+            },
+        }
+    }
+    fake_signal = _FakeSignalClient()
+    fake_search = _FakeSearchService(summary="summary-only")
+    handler = WebhookHandler(
+        settings=_settings(mode="group", search_use_history_for_summary=True),
+        signal_client=cast(Any, fake_signal),
+        openrouter_client=cast(Any, _FakeOpenRouterClient()),
+        chat_context=cast(Any, _FakeChatContextStore()),
+        openrouter_image_client=None,
+        dedupe=DedupeCache(ttl_seconds=60),
+        search_service=cast(Any, fake_search),
+    )
+
+    background_tasks = BackgroundTasks()
+    response = await handler.handle_webhook(payload, background_tasks)
+    await _run_background_tasks(background_tasks)
+
+    assert response == {"status": "accepted", "reason": "search_queued"}
+    assert fake_search.search_calls == [("search", "latest openrouter news")]
+    assert fake_search.search_user_requests == [None]
+    assert fake_search.search_history_contexts[0] is not None
+    assert len(fake_search.search_history_contexts[0] or []) == 4
+
+
+@pytest.mark.anyio
+async def test_handle_webhook_images_command_sends_attachment() -> None:
+    payload = {
+        "envelope": {
+            "sourceNumber": "+15550002222",
+            "timestamp": 1730000000001,
+            "dataMessage": {
+                "message": "/images red fox",
+                "timestamp": 1730000000001,
+            },
+        }
+    }
+    fake_signal = _FakeSignalClient()
+    fake_search = _FakeSearchService()
+    handler = WebhookHandler(
+        settings=_settings(mode="group"),
+        signal_client=cast(Any, fake_signal),
+        openrouter_client=cast(Any, _FakeOpenRouterClient()),
+        chat_context=cast(Any, _FakeChatContextStore()),
+        openrouter_image_client=None,
+        dedupe=DedupeCache(ttl_seconds=60),
+        search_service=cast(Any, fake_search),
+    )
+
+    background_tasks = BackgroundTasks()
+    response = await handler.handle_webhook(payload, background_tasks)
+    await _run_background_tasks(background_tasks)
+
+    assert response == {"status": "accepted", "reason": "search_image_queued"}
+    assert fake_search.image_calls == ["red fox"]
+    assert fake_signal.image_targets
+
+
+@pytest.mark.anyio
+async def test_handle_webhook_source_command_returns_sources() -> None:
+    payload = {
+        "envelope": {
+            "sourceNumber": "+15550002222",
+            "timestamp": 1730000000001,
+            "dataMessage": {
+                "message": "/source openrouter claim",
+                "timestamp": 1730000000001,
+            },
+        }
+    }
+    fake_signal = _FakeSignalClient()
+    fake_search = _FakeSearchService(
+        source_text="Sources:\n1. Title - https://example.com"
+    )
+    handler = WebhookHandler(
+        settings=_settings(mode="group"),
+        signal_client=cast(Any, fake_signal),
+        openrouter_client=cast(Any, _FakeOpenRouterClient()),
+        chat_context=cast(Any, _FakeChatContextStore()),
+        openrouter_image_client=None,
+        dedupe=DedupeCache(ttl_seconds=60),
+        search_service=cast(Any, fake_search),
+    )
+
+    background_tasks = BackgroundTasks()
+    response = await handler.handle_webhook(payload, background_tasks)
+    await _run_background_tasks(background_tasks)
+
+    assert response == {"status": "accepted", "reason": "source_queued"}
+    assert fake_search.source_calls == ["openrouter claim"]
+    assert fake_signal.text_messages == ["Sources:\n1. Title - https://example.com"]
+
+
+@pytest.mark.anyio
+async def test_handle_webhook_auto_search_from_dm() -> None:
+    payload = {
+        "envelope": {
+            "sourceNumber": "+15550002222",
+            "timestamp": 1730000000001,
+            "dataMessage": {
+                "message": "what happened with openrouter this week?",
+                "timestamp": 1730000000001,
+            },
+        }
+    }
+    fake_signal = _FakeSignalClient()
+    fake_context = _FakeChatContextStore()
+    fake_search = _FakeSearchService(
+        decision=SearchRouteDecision(
+            should_search=True,
+            mode="news",
+            query="openrouter this week",
+            reason="current_events",
+        ),
+        summary="news summary",
+    )
+    handler = WebhookHandler(
+        settings=_settings(mode="group", search_context_mode="context"),
+        signal_client=cast(Any, fake_signal),
+        openrouter_client=cast(Any, _FakeOpenRouterClient()),
+        chat_context=cast(Any, fake_context),
+        openrouter_image_client=None,
+        dedupe=DedupeCache(ttl_seconds=60),
+        search_service=cast(Any, fake_search),
+    )
+
+    background_tasks = BackgroundTasks()
+    response = await handler.handle_webhook(payload, background_tasks)
+    await _run_background_tasks(background_tasks)
+
+    assert response == {"status": "accepted", "reason": "search_queued"}
+    assert fake_search.decide_prompts == ["what happened with openrouter this week?"]
+    assert fake_search.search_calls == [("news", "openrouter this week")]
+    assert fake_search.search_user_requests == [
+        "what happened with openrouter this week?"
+    ]
+    assert fake_search.search_history_contexts == [None]
+    assert fake_signal.text_messages == ["news summary"]
+    assert fake_context.appended
+    assert fake_context.appended[0][1] == "what happened with openrouter this week?"
+
+
+@pytest.mark.anyio
+async def test_handle_webhook_auto_search_resolves_followup_prompt_before_routing() -> None:
+    payload = {
+        "envelope": {
+            "sourceNumber": "+15550002222",
+            "timestamp": 1730000000001,
+            "dataMessage": {
+                "message": "what's he up to now",
+                "timestamp": 1730000000001,
+            },
+        }
+    }
+    fake_signal = _FakeSignalClient()
+    fake_search = _FakeSearchService(
+        decision=SearchRouteDecision(
+            should_search=True,
+            mode="search",
+            query="nick land current projects",
+            reason="person_lookup",
+        ),
+        followup_resolution=FollowupResolutionDecision(
+            resolved_prompt="what is nick land up to now",
+            needs_clarification=False,
+            clarification_text=None,
+            reason="entity_match_recent_turns",
+            used_context=True,
+            confidence=0.92,
+            subject_hint="nick land",
+        ),
+        source_context=[
+            {"mode": "search", "title": "Nick Land", "snippet": "British philosopher"}
+        ],
+        summary="summary",
+    )
+    handler = WebhookHandler(
+        settings=_settings(mode="group", search_context_mode="context"),
+        signal_client=cast(Any, fake_signal),
+        openrouter_client=cast(Any, _FakeOpenRouterClient()),
+        chat_context=cast(Any, _FakeChatContextStore()),
+        openrouter_image_client=None,
+        dedupe=DedupeCache(ttl_seconds=60),
+        search_service=cast(Any, fake_search),
+    )
+
+    background_tasks = BackgroundTasks()
+    response = await handler.handle_webhook(payload, background_tasks)
+    await _run_background_tasks(background_tasks)
+
+    assert response == {"status": "accepted", "reason": "search_queued"}
+    assert fake_search.decide_prompts == ["what is nick land up to now"]
+    assert fake_search.search_calls == [("search", "nick land current projects")]
+    assert fake_search.search_user_requests == ["what's he up to now"]
+    assert fake_signal.text_messages == ["summary"]
+
+
+@pytest.mark.anyio
+async def test_handle_webhook_auto_search_clarifies_unresolved_followup() -> None:
+    payload = {
+        "envelope": {
+            "sourceNumber": "+15550002222",
+            "timestamp": 1730000000001,
+            "dataMessage": {
+                "message": "what's he up to now",
+                "timestamp": 1730000000001,
+            },
+        }
+    }
+    fake_signal = _FakeSignalClient()
+    fake_search = _FakeSearchService(
+        decision=SearchRouteDecision(
+            should_search=True,
+            mode="search",
+            query="should not be used",
+            reason="unused",
+        ),
+        followup_resolution=FollowupResolutionDecision(
+            resolved_prompt="what's he up to now",
+            needs_clarification=True,
+            clarification_text="Who are you referring to?",
+            reason="low_confidence",
+            used_context=True,
+            confidence=0.4,
+            subject_hint=None,
+        ),
+    )
+    handler = WebhookHandler(
+        settings=_settings(mode="group", search_context_mode="context"),
+        signal_client=cast(Any, fake_signal),
+        openrouter_client=cast(Any, _FakeOpenRouterClient()),
+        chat_context=cast(Any, _FakeChatContextStore()),
+        openrouter_image_client=None,
+        dedupe=DedupeCache(ttl_seconds=60),
+        search_service=cast(Any, fake_search),
+    )
+
+    background_tasks = BackgroundTasks()
+    response = await handler.handle_webhook(payload, background_tasks)
+    await _run_background_tasks(background_tasks)
+
+    assert response == {
+        "status": "accepted",
+        "reason": "search_followup_clarification",
+    }
+    assert fake_search.decide_prompts == []
+    assert fake_search.search_calls == []
+    assert fake_signal.text_messages == ["Who are you referring to?"]
+
+
+@pytest.mark.anyio
+async def test_handle_webhook_pending_followup_reply_autofills_and_routes() -> None:
+    first_payload = {
+        "envelope": {
+            "sourceNumber": "+15550002222",
+            "timestamp": 1730000000001,
+            "dataMessage": {
+                "message": "who is he in islam",
+                "timestamp": 1730000000001,
+            },
+        }
+    }
+    second_payload = {
+        "envelope": {
+            "sourceNumber": "+15550002222",
+            "timestamp": 1730000000002,
+            "dataMessage": {
+                "message": "god",
+                "timestamp": 1730000000002,
+            },
+        }
+    }
+    fake_signal = _FakeSignalClient()
+    fake_search = _FakeSearchService(
+        decision=SearchRouteDecision(
+            should_search=True,
+            mode="search",
+            query="god islam",
+            reason="person_lookup",
+        ),
+        followup_resolution=FollowupResolutionDecision(
+            resolved_prompt="who is he in islam",
+            needs_clarification=True,
+            clarification_text="Who are you referring to?",
+            reason="low_confidence",
+            used_context=True,
+            confidence=0.4,
+            subject_hint=None,
+        ),
+        pending_reply_resolution=FollowupResolutionDecision(
+            resolved_prompt="who is god in islam",
+            needs_clarification=False,
+            clarification_text=None,
+            reason="pending_reply_deterministic",
+            used_context=False,
+            confidence=1.0,
+            subject_hint="god",
+        ),
+        summary="answer",
+    )
+    handler = WebhookHandler(
+        settings=_settings(mode="group", search_context_mode="context"),
+        signal_client=cast(Any, fake_signal),
+        openrouter_client=cast(Any, _FakeOpenRouterClient()),
+        chat_context=cast(Any, _FakeChatContextStore()),
+        openrouter_image_client=None,
+        dedupe=DedupeCache(ttl_seconds=60),
+        search_service=cast(Any, fake_search),
+    )
+
+    first_tasks = BackgroundTasks()
+    first_response = await handler.handle_webhook(first_payload, first_tasks)
+    await _run_background_tasks(first_tasks)
+    assert first_response == {
+        "status": "accepted",
+        "reason": "search_followup_clarification",
+    }
+
+    second_tasks = BackgroundTasks()
+    second_response = await handler.handle_webhook(second_payload, second_tasks)
+    await _run_background_tasks(second_tasks)
+
+    assert second_response == {"status": "accepted", "reason": "search_queued"}
+    assert fake_search.pending_reply_calls
+    assert fake_search.decide_prompts == ["who is god in islam"]
+    assert fake_search.search_user_requests[-1] == "who is god in islam"
+    assert fake_signal.text_messages == ["Who are you referring to?", "answer"]
+
+
+@pytest.mark.anyio
+async def test_handle_webhook_pending_followup_second_failure_requests_rephrase() -> None:
+    first_payload = {
+        "envelope": {
+            "sourceNumber": "+15550002222",
+            "timestamp": 1730000000001,
+            "dataMessage": {
+                "message": "who is he in islam",
+                "timestamp": 1730000000001,
+            },
+        }
+    }
+    second_payload = {
+        "envelope": {
+            "sourceNumber": "+15550002222",
+            "timestamp": 1730000000002,
+            "dataMessage": {
+                "message": "not sure",
+                "timestamp": 1730000000002,
+            },
+        }
+    }
+    fake_signal = _FakeSignalClient()
+    fake_search = _FakeSearchService(
+        followup_resolution=FollowupResolutionDecision(
+            resolved_prompt="who is he in islam",
+            needs_clarification=True,
+            clarification_text="Who are you referring to?",
+            reason="low_confidence",
+            used_context=True,
+            confidence=0.4,
+            subject_hint=None,
+        ),
+        pending_reply_resolution=FollowupResolutionDecision(
+            resolved_prompt="who is he in islam",
+            needs_clarification=True,
+            clarification_text="Who are you referring to?",
+            reason="still_ambiguous",
+            used_context=True,
+            confidence=0.3,
+            subject_hint=None,
+        ),
+    )
+    handler = WebhookHandler(
+        settings=_settings(mode="group", search_context_mode="context"),
+        signal_client=cast(Any, fake_signal),
+        openrouter_client=cast(Any, _FakeOpenRouterClient()),
+        chat_context=cast(Any, _FakeChatContextStore()),
+        openrouter_image_client=None,
+        dedupe=DedupeCache(ttl_seconds=60),
+        search_service=cast(Any, fake_search),
+    )
+
+    first_tasks = BackgroundTasks()
+    await handler.handle_webhook(first_payload, first_tasks)
+    await _run_background_tasks(first_tasks)
+
+    second_tasks = BackgroundTasks()
+    second_response = await handler.handle_webhook(second_payload, second_tasks)
+    await _run_background_tasks(second_tasks)
+
+    assert second_response == {
+        "status": "accepted",
+        "reason": "search_followup_rephrase_requested",
+    }
+    assert fake_search.decide_prompts == []
+    assert "Please restate your full question" in fake_signal.text_messages[-1]
+
+
+@pytest.mark.anyio
+async def test_handle_webhook_auto_search_logs_route_debug(caplog: pytest.LogCaptureFixture) -> None:
+    payload = {
+        "envelope": {
+            "sourceNumber": "+15550002222",
+            "timestamp": 1730000000001,
+            "dataMessage": {
+                "message": "what happened with openrouter this week?",
+                "timestamp": 1730000000001,
+            },
+        }
+    }
+    fake_signal = _FakeSignalClient()
+    fake_search = _FakeSearchService(
+        decision=SearchRouteDecision(
+            should_search=True,
+            mode="news",
+            query="openrouter this week",
+            reason="current_events",
+        ),
+        summary="news summary",
+    )
+    handler = WebhookHandler(
+        settings=_settings(
+            mode="group",
+            search_context_mode="context",
+            search_debug_logging=True,
+        ),
+        signal_client=cast(Any, fake_signal),
+        openrouter_client=cast(Any, _FakeOpenRouterClient()),
+        chat_context=cast(Any, _FakeChatContextStore()),
+        openrouter_image_client=None,
+        dedupe=DedupeCache(ttl_seconds=60),
+        search_service=cast(Any, fake_search),
+    )
+    caplog.set_level(logging.INFO, logger="signal_bot_orx.webhook")
+
+    background_tasks = BackgroundTasks()
+    await handler.handle_webhook(payload, background_tasks)
+    await _run_background_tasks(background_tasks)
+
+    assert any(
+        "search_route_debug" in record.getMessage()
+        and "auto_should_search=True" in record.getMessage()
+        and "auto_mode=news" in record.getMessage()
+        and "final_path=search_summary" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+@pytest.mark.anyio
+async def test_handle_webhook_auto_search_passes_history_context_when_enabled() -> None:
+    payload = {
+        "envelope": {
+            "sourceNumber": "+15550002222",
+            "timestamp": 1730000000001,
+            "dataMessage": {
+                "message": "what happened with openrouter this week?",
+                "timestamp": 1730000000001,
+            },
+        }
+    }
+    fake_signal = _FakeSignalClient()
+    fake_search = _FakeSearchService(
+        decision=SearchRouteDecision(
+            should_search=True,
+            mode="news",
+            query="openrouter this week",
+            reason="current_events",
+        ),
+        summary="news summary",
+    )
+    handler = WebhookHandler(
+        settings=_settings(
+            mode="group",
+            search_context_mode="context",
+            search_use_history_for_summary=True,
+        ),
+        signal_client=cast(Any, fake_signal),
+        openrouter_client=cast(Any, _FakeOpenRouterClient()),
+        chat_context=cast(Any, _FakeChatContextStore()),
+        openrouter_image_client=None,
+        dedupe=DedupeCache(ttl_seconds=60),
+        search_service=cast(Any, fake_search),
+    )
+
+    background_tasks = BackgroundTasks()
+    response = await handler.handle_webhook(payload, background_tasks)
+    await _run_background_tasks(background_tasks)
+
+    assert response == {"status": "accepted", "reason": "search_queued"}
+    assert fake_search.search_calls == [("news", "openrouter this week")]
+    assert fake_search.search_history_contexts[0] is not None
+    assert len(fake_search.search_history_contexts[0] or []) == 4
+
+
+@pytest.mark.anyio
+async def test_handle_webhook_no_context_mode_skips_auto_search() -> None:
+    payload = {
+        "envelope": {
+            "sourceNumber": "+15550002222",
+            "timestamp": 1730000000001,
+            "dataMessage": {
+                "message": "what happened with openrouter this week?",
+                "timestamp": 1730000000001,
+            },
+        }
+    }
+    fake_signal = _FakeSignalClient()
+    fake_search = _FakeSearchService(
+        decision=SearchRouteDecision(
+            should_search=True,
+            mode="news",
+            query="openrouter this week",
+            reason="current_events",
+        ),
+    )
+    handler = WebhookHandler(
+        settings=_settings(mode="group", search_context_mode="no_context"),
+        signal_client=cast(Any, fake_signal),
+        openrouter_client=cast(Any, _FakeOpenRouterClient(reply="chat-response")),
+        chat_context=cast(Any, _FakeChatContextStore()),
+        openrouter_image_client=None,
+        dedupe=DedupeCache(ttl_seconds=60),
+        search_service=cast(Any, fake_search),
+    )
+
+    background_tasks = BackgroundTasks()
+    response = await handler.handle_webhook(payload, background_tasks)
+    await _run_background_tasks(background_tasks)
+
+    assert response == {"status": "accepted", "reason": "chat_queued"}
+    assert fake_search.search_calls == []
+    assert fake_signal.text_messages == ["chat-response"]
+
+
+@pytest.mark.anyio
+async def test_handle_webhook_context_mode_skips_disabled_auto_search_mode() -> None:
+    payload = {
+        "envelope": {
+            "sourceNumber": "+15550002222",
+            "timestamp": 1730000000001,
+            "dataMessage": {
+                "message": "what happened with openrouter this week?",
+                "timestamp": 1730000000001,
+            },
+        }
+    }
+    fake_signal = _FakeSignalClient()
+    fake_search = _FakeSearchService(
+        decision=SearchRouteDecision(
+            should_search=True,
+            mode="news",
+            query="openrouter this week",
+            reason="current_events",
+        ),
+    )
+    handler = WebhookHandler(
+        settings=_settings(
+            mode="group",
+            search_context_mode="context",
+            search_mode_news_enabled=False,
+        ),
+        signal_client=cast(Any, fake_signal),
+        openrouter_client=cast(Any, _FakeOpenRouterClient(reply="chat-response")),
+        chat_context=cast(Any, _FakeChatContextStore()),
+        openrouter_image_client=None,
+        dedupe=DedupeCache(ttl_seconds=60),
+        search_service=cast(Any, fake_search),
+    )
+
+    background_tasks = BackgroundTasks()
+    response = await handler.handle_webhook(payload, background_tasks)
+    await _run_background_tasks(background_tasks)
+
+    assert response == {"status": "accepted", "reason": "chat_queued"}
+    assert fake_search.search_calls == []
+    assert fake_signal.text_messages == ["chat-response"]
 
 
 @pytest.mark.anyio

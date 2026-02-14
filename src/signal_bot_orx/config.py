@@ -7,6 +7,7 @@ from typing import Literal
 from signal_bot_orx.chat_prompt import DEFAULT_CHAT_SYSTEM_PROMPT
 
 GroupReplyMode = Literal["group", "dm_fallback"]
+SearchContextMode = Literal["no_context", "context"]
 
 DEFAULT_OPENROUTER_MODEL = "openai/gpt-4o-mini"
 DEFAULT_MENTION_ALIASES = ("@signalbot", "@bot")
@@ -37,6 +38,27 @@ class Settings:
     bot_chat_force_plain_text: bool = True
     bot_mention_aliases: tuple[str, ...] = DEFAULT_MENTION_ALIASES
     bot_max_prompt_chars: int = 700
+    bot_search_enabled: bool = True
+    bot_search_context_mode: SearchContextMode = "no_context"
+    bot_search_mode_search_enabled: bool = True
+    bot_search_mode_news_enabled: bool = True
+    bot_search_mode_wiki_enabled: bool = True
+    bot_search_mode_images_enabled: bool = True
+    bot_search_debug_logging: bool = False
+    bot_search_persona_enabled: bool = False
+    bot_search_use_history_for_summary: bool = False
+    bot_search_region: str = "us-en"
+    bot_search_safesearch: Literal["on", "moderate", "off"] = "moderate"
+    bot_search_backend_search: str = "auto"
+    bot_search_backend_news: str = "auto"
+    bot_search_backend_wiki: str = "wikipedia"
+    bot_search_backend_images: str = "duckduckgo"
+    bot_search_text_max_results: int = 5
+    bot_search_news_max_results: int = 5
+    bot_search_wiki_max_results: int = 3
+    bot_search_images_max_results: int = 3
+    bot_search_timeout_seconds: float = 8.0
+    bot_search_source_ttl_seconds: int = 1800
     bot_group_reply_mode: GroupReplyMode = "group"
     bot_webhook_host: str = "127.0.0.1"
     bot_webhook_port: int = 8001
@@ -116,6 +138,83 @@ class Settings:
             else True,
             bot_mention_aliases=mention_aliases,
             bot_max_prompt_chars=int(os.getenv("BOT_MAX_PROMPT_CHARS", "700")),
+            bot_search_enabled=_parse_bool(os.getenv("BOT_SEARCH_ENABLED"))
+            if os.getenv("BOT_SEARCH_ENABLED") is not None
+            else True,
+            bot_search_context_mode=_parse_search_context_mode(
+                os.getenv("BOT_SEARCH_CONTEXT_MODE")
+            ),
+            bot_search_mode_search_enabled=_parse_bool(
+                os.getenv("BOT_SEARCH_MODE_SEARCH_ENABLED")
+            )
+            if os.getenv("BOT_SEARCH_MODE_SEARCH_ENABLED") is not None
+            else True,
+            bot_search_mode_news_enabled=_parse_bool(
+                os.getenv("BOT_SEARCH_MODE_NEWS_ENABLED")
+            )
+            if os.getenv("BOT_SEARCH_MODE_NEWS_ENABLED") is not None
+            else True,
+            bot_search_mode_wiki_enabled=_parse_bool(
+                os.getenv("BOT_SEARCH_MODE_WIKI_ENABLED")
+            )
+            if os.getenv("BOT_SEARCH_MODE_WIKI_ENABLED") is not None
+            else True,
+            bot_search_mode_images_enabled=_parse_bool(
+                os.getenv("BOT_SEARCH_MODE_IMAGES_ENABLED")
+            )
+            if os.getenv("BOT_SEARCH_MODE_IMAGES_ENABLED") is not None
+            else True,
+            bot_search_debug_logging=_parse_bool(
+                os.getenv("BOT_SEARCH_DEBUG_LOGGING")
+            )
+            if os.getenv("BOT_SEARCH_DEBUG_LOGGING") is not None
+            else False,
+            bot_search_persona_enabled=_parse_bool(
+                os.getenv("BOT_SEARCH_PERSONA_ENABLED")
+            )
+            if os.getenv("BOT_SEARCH_PERSONA_ENABLED") is not None
+            else False,
+            bot_search_use_history_for_summary=_parse_bool(
+                os.getenv("BOT_SEARCH_USE_HISTORY_FOR_SUMMARY")
+            )
+            if os.getenv("BOT_SEARCH_USE_HISTORY_FOR_SUMMARY") is not None
+            else False,
+            bot_search_region=os.getenv("BOT_SEARCH_REGION", "us-en"),
+            bot_search_safesearch=_parse_safesearch(os.getenv("BOT_SEARCH_SAFESEARCH")),
+            bot_search_backend_search=_parse_non_empty_str(
+                os.getenv("BOT_SEARCH_BACKEND_SEARCH"),
+                default="auto",
+            ),
+            bot_search_backend_news=_parse_non_empty_str(
+                os.getenv("BOT_SEARCH_BACKEND_NEWS"),
+                default="auto",
+            ),
+            bot_search_backend_wiki=_parse_non_empty_str(
+                os.getenv("BOT_SEARCH_BACKEND_WIKI"),
+                default="wikipedia",
+            ),
+            bot_search_backend_images=_parse_non_empty_str(
+                os.getenv("BOT_SEARCH_BACKEND_IMAGES"),
+                default="duckduckgo",
+            ),
+            bot_search_text_max_results=int(
+                os.getenv("BOT_SEARCH_TEXT_MAX_RESULTS", "5")
+            ),
+            bot_search_news_max_results=int(
+                os.getenv("BOT_SEARCH_NEWS_MAX_RESULTS", "5")
+            ),
+            bot_search_wiki_max_results=int(
+                os.getenv("BOT_SEARCH_WIKI_MAX_RESULTS", "3")
+            ),
+            bot_search_images_max_results=int(
+                os.getenv("BOT_SEARCH_IMAGES_MAX_RESULTS", "3")
+            ),
+            bot_search_timeout_seconds=float(
+                os.getenv("BOT_SEARCH_TIMEOUT_SECONDS", "8")
+            ),
+            bot_search_source_ttl_seconds=int(
+                os.getenv("BOT_SEARCH_SOURCE_TTL_SECONDS", "1800")
+            ),
             bot_group_reply_mode=_parse_group_reply_mode(
                 os.getenv("BOT_GROUP_REPLY_MODE")
             ),
@@ -165,6 +264,47 @@ def _parse_group_reply_mode(value: str | None) -> GroupReplyMode:
     raise RuntimeError(
         "Invalid BOT_GROUP_REPLY_MODE. Expected 'group' or 'dm_fallback'."
     )
+
+
+def _parse_safesearch(value: str | None) -> Literal["on", "moderate", "off"]:
+    if value is None:
+        return "moderate"
+
+    normalized = value.strip().lower()
+    if normalized == "on":
+        return "on"
+    if normalized == "moderate":
+        return "moderate"
+    if normalized == "off":
+        return "off"
+
+    raise RuntimeError(
+        "Invalid BOT_SEARCH_SAFESEARCH. Expected 'on', 'moderate', or 'off'."
+    )
+
+
+def _parse_search_context_mode(value: str | None) -> SearchContextMode:
+    if value is None:
+        return "no_context"
+
+    normalized = value.strip().lower()
+    if normalized == "no_context":
+        return "no_context"
+    if normalized == "context":
+        return "context"
+
+    raise RuntimeError(
+        "Invalid BOT_SEARCH_CONTEXT_MODE. Expected 'no_context' or 'context'."
+    )
+
+
+def _parse_non_empty_str(value: str | None, *, default: str) -> str:
+    if value is None:
+        return default
+    stripped = value.strip().lower()
+    if not stripped:
+        return default
+    return stripped
 
 
 def _chat_system_prompt_from_env(value: str | None) -> str:

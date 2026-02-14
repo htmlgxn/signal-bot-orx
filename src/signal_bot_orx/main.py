@@ -11,6 +11,9 @@ from signal_bot_orx.chat_context import ChatContextStore
 from signal_bot_orx.config import Settings
 from signal_bot_orx.dedupe import DedupeCache
 from signal_bot_orx.openrouter_client import OpenRouterClient, OpenRouterImageClient
+from signal_bot_orx.search_client import SearchClient
+from signal_bot_orx.search_context import SearchContextStore
+from signal_bot_orx.search_service import SearchService
 from signal_bot_orx.signal_client import SignalClient
 from signal_bot_orx.webhook import WebhookHandler, build_router
 
@@ -57,6 +60,16 @@ def create_app(settings: Settings) -> FastAPI:
         max_turns=settings.bot_chat_context_turns,
         ttl_seconds=settings.bot_chat_context_ttl_seconds,
     )
+    search_context = SearchContextStore(
+        ttl_seconds=settings.bot_search_source_ttl_seconds
+    )
+    search_service = SearchService(
+        settings=settings,
+        search_client=SearchClient(),
+        search_context=search_context,
+        openrouter_client=openrouter_client,
+        http_client=http_client,
+    )
     dedupe = DedupeCache(ttl_seconds=300)
     handler = WebhookHandler(
         settings=settings,
@@ -64,6 +77,7 @@ def create_app(settings: Settings) -> FastAPI:
         openrouter_client=openrouter_client,
         openrouter_image_client=openrouter_image_client,
         chat_context=chat_context,
+        search_service=search_service,
         dedupe=dedupe,
     )
 

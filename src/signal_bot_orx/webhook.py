@@ -15,6 +15,12 @@ from signal_bot_orx.openrouter_client import (
     OpenRouterClient,
     OpenRouterImageClient,
 )
+from signal_bot_orx.search_client import SearchError, SearchMode
+from signal_bot_orx.search_service import (
+    SearchRouteDecision,
+    SearchService,
+    build_followup_template_prompt,
+)
 from signal_bot_orx.signal_client import SignalClient, SignalSendError
 from signal_bot_orx.types import (
     IncomingMessage,
@@ -29,6 +35,12 @@ logger = logging.getLogger(__name__)
 
 COMMAND_PREFIX = "/imagine"
 CHAT_MAX_REPLY_CHARS = 2000
+SEARCH_COMMANDS: dict[str, SearchMode] = {
+    "/search": "search",
+    "/news": "news",
+    "/wiki": "wiki",
+    "/images": "images",
+}
 
 
 class WebhookHandler:
@@ -41,12 +53,14 @@ class WebhookHandler:
         openrouter_image_client: OpenRouterImageClient | None,
         chat_context: ChatContextStore,
         dedupe: DedupeCache,
+        search_service: SearchService | None = None,
     ) -> None:
         self._settings = settings
         self._signal_client = signal_client
         self._openrouter_client = openrouter_client
         self._openrouter_image_client = openrouter_image_client
         self._chat_context = chat_context
+        self._search_service = search_service
         self._dedupe = dedupe
 
     async def handle_webhook(
@@ -59,7 +73,18 @@ class WebhookHandler:
                 "method" in payload,
                 len(payload),
             )
+            self._log_search_route(
+                message_scope="unknown",
+                mention_eligible=False,
+                slash_command=None,
+                auto_decision=None,
+                final_path="ignored",
+                reason="unsupported_event",
+            )
             return {"status": "ignored", "reason": "unsupported_event"}
+
+        message_scope = "group" if parsed.target.group_id is not None else "dm"
+        mention_eligible = should_handle_chat_mention(parsed, self._settings)
 
         if not is_authorized_message(parsed, self._settings):
             logger.info(
@@ -67,17 +92,91 @@ class WebhookHandler:
                 parsed.sender,
                 parsed.target.group_id,
             )
+            self._log_search_route(
+                message_scope=message_scope,
+                mention_eligible=mention_eligible,
+                slash_command=None,
+                auto_decision=None,
+                final_path="ignored",
+                reason="unauthorized",
+            )
             return {"status": "ignored", "reason": "unauthorized"}
 
         key = dedupe_key(parsed)
         if not self._dedupe.mark_once(key):
+            self._log_search_route(
+                message_scope=message_scope,
+                mention_eligible=mention_eligible,
+                slash_command=None,
+                auto_decision=None,
+                final_path="ignored",
+                reason="duplicate",
+            )
             return {"status": "ignored", "reason": "duplicate"}
 
-        imagine_prompt = parse_imagine_prompt(parsed.text)
+        command_text = normalized_command_text(parsed, self._settings)
+
+        source_claim = parse_source_command(parsed.text) or parse_source_command(
+            command_text
+        )
+        if source_claim is not None:
+            self._clear_pending_followup_state(parsed)
+            self._log_search_route(
+                message_scope=message_scope,
+                mention_eligible=mention_eligible,
+                slash_command="/source",
+                auto_decision=None,
+                final_path="search_source",
+                reason="source_command",
+            )
+            return self.handle_source_command(parsed, source_claim, background_tasks)
+
+        search_command = parse_search_command(parsed.text) or parse_search_command(
+            command_text
+        )
+        if search_command is not None:
+            mode, query = search_command
+            self._clear_pending_followup_state(parsed)
+            final_path = "search_image" if mode == "images" else "search_summary"
+            self._log_search_route(
+                message_scope=message_scope,
+                mention_eligible=mention_eligible,
+                slash_command=f"/{mode}",
+                auto_decision=None,
+                final_path=final_path,
+                reason="search_command",
+            )
+            return self.handle_search_command(
+                parsed,
+                mode,
+                query,
+                background_tasks,
+            )
+
+        imagine_prompt = parse_imagine_prompt(parsed.text) or parse_imagine_prompt(
+            command_text
+        )
         if imagine_prompt is not None:
+            self._clear_pending_followup_state(parsed)
+            self._log_search_route(
+                message_scope=message_scope,
+                mention_eligible=mention_eligible,
+                slash_command="/imagine",
+                auto_decision=None,
+                final_path="chat",
+                reason="imagine_command",
+            )
             return self.handle_imagine_command(parsed, imagine_prompt, background_tasks)
 
-        if not should_handle_chat_mention(parsed, self._settings):
+        if not mention_eligible:
+            self._log_search_route(
+                message_scope=message_scope,
+                mention_eligible=False,
+                slash_command=None,
+                auto_decision=None,
+                final_path="ignored",
+                reason="non_mention",
+            )
             return {"status": "ignored", "reason": "non_mention"}
 
         chat_prompt = normalize_chat_prompt(parsed, self._settings)
@@ -88,6 +187,14 @@ class WebhookHandler:
                 parsed,
                 _chat_usage_message(parsed),
                 reply_target,
+            )
+            self._log_search_route(
+                message_scope=message_scope,
+                mention_eligible=True,
+                slash_command=None,
+                auto_decision=None,
+                final_path="chat",
+                reason="chat_usage_sent",
             )
             return {"status": "accepted", "reason": "chat_usage_sent"}
 
@@ -102,10 +209,356 @@ class WebhookHandler:
                 ),
                 reply_target,
             )
+            self._log_search_route(
+                message_scope=message_scope,
+                mention_eligible=True,
+                slash_command=None,
+                auto_decision=None,
+                final_path="chat",
+                reason="chat_prompt_too_long",
+            )
             return {"status": "accepted", "reason": "chat_prompt_too_long"}
 
+        claim_request = parse_source_request_text(chat_prompt)
+        if claim_request is not None:
+            self._log_search_route(
+                message_scope=message_scope,
+                mention_eligible=True,
+                slash_command=None,
+                auto_decision=None,
+                final_path="search_source",
+                reason="source_request_text",
+            )
+            return self.handle_source_command(parsed, claim_request, background_tasks)
+
+        if (
+            self._settings.bot_search_enabled
+            and self._settings.bot_search_context_mode == "context"
+            and self._search_service is not None
+        ):
+            conversation_key = conversation_key_for_message(parsed)
+            followup_history_context = build_followup_resolution_history_context(
+                chat_context=self._chat_context,
+                conversation_key=conversation_key,
+            )
+            source_context = self._search_service.recent_source_context(
+                conversation_key=conversation_key,
+                limit=6,
+            )
+            pending_state = self._search_service.get_pending_followup_state(
+                conversation_key=conversation_key,
+            )
+            resolved_prompt = chat_prompt
+            summary_user_request = chat_prompt
+
+            if pending_state is not None:
+                if is_pending_followup_reply_candidate(chat_prompt):
+                    pending_resolution = (
+                        await self._search_service.resolve_pending_followup_reply(
+                            reply_prompt=chat_prompt,
+                            pending_state=pending_state,
+                            history_context=followup_history_context,
+                            source_context=source_context,
+                        )
+                    )
+                    if pending_resolution.needs_clarification:
+                        attempts = self._search_service.bump_pending_followup_attempt(
+                            conversation_key=conversation_key,
+                        )
+                        self._log_followup_resolution(
+                            event="followup_pending_set",
+                            history_count=len(followup_history_context),
+                            source_count=len(source_context),
+                            used_context=pending_resolution.used_context,
+                            reason=pending_resolution.reason,
+                            prompt_len=len(chat_prompt),
+                            resolved_len=len(pending_resolution.resolved_prompt),
+                            confidence=pending_resolution.confidence,
+                        )
+                        reply_target = resolve_reply_target(parsed, self._settings)
+                        if attempts >= 1:
+                            self._search_service.clear_pending_followup_state(
+                                conversation_key=conversation_key,
+                            )
+                            self._log_followup_resolution(
+                                event="followup_pending_cleared",
+                                history_count=len(followup_history_context),
+                                source_count=len(source_context),
+                                used_context=True,
+                                reason="max_attempts_reached",
+                                prompt_len=len(chat_prompt),
+                                resolved_len=0,
+                                confidence=0.0,
+                            )
+                            background_tasks.add_task(
+                                self._safe_send_text,
+                                parsed,
+                                "Please restate your full question, for example: "
+                                "who is god in islam?",
+                                reply_target,
+                            )
+                            return {
+                                "status": "accepted",
+                                "reason": "search_followup_rephrase_requested",
+                            }
+
+                        background_tasks.add_task(
+                            self._safe_send_text,
+                            parsed,
+                            pending_resolution.clarification_text
+                            or "Who are you referring to?",
+                            reply_target,
+                        )
+                        return {
+                            "status": "accepted",
+                            "reason": "search_followup_clarification",
+                        }
+
+                    self._search_service.clear_pending_followup_state(
+                        conversation_key=conversation_key,
+                    )
+                    resolved_prompt = pending_resolution.resolved_prompt or chat_prompt
+                    summary_user_request = resolved_prompt
+                    self._log_followup_resolution(
+                        event="followup_pending_applied",
+                        history_count=len(followup_history_context),
+                        source_count=len(source_context),
+                        used_context=pending_resolution.used_context,
+                        reason=pending_resolution.reason,
+                        prompt_len=len(chat_prompt),
+                        resolved_len=len(resolved_prompt),
+                        confidence=pending_resolution.confidence,
+                    )
+                else:
+                    self._search_service.clear_pending_followup_state(
+                        conversation_key=conversation_key,
+                    )
+                    self._log_followup_resolution(
+                        event="followup_pending_cleared",
+                        history_count=len(followup_history_context),
+                        source_count=len(source_context),
+                        used_context=False,
+                        reason="non_candidate_new_prompt",
+                        prompt_len=len(chat_prompt),
+                        resolved_len=0,
+                        confidence=0.0,
+                    )
+
+            if pending_state is None:
+                followup_resolution = await self._search_service.resolve_followup_prompt(
+                    prompt=chat_prompt,
+                    history_context=followup_history_context,
+                    source_context=source_context,
+                )
+                self._log_followup_resolution(
+                    event="followup_resolution_detected",
+                    history_count=len(followup_history_context),
+                    source_count=len(source_context),
+                    used_context=followup_resolution.used_context,
+                    reason=followup_resolution.reason,
+                    prompt_len=len(chat_prompt),
+                    resolved_len=len(followup_resolution.resolved_prompt),
+                    confidence=followup_resolution.confidence,
+                )
+                if followup_resolution.needs_clarification:
+                    template_prompt = build_followup_template_prompt(chat_prompt)
+                    self._search_service.set_pending_followup_state(
+                        conversation_key=conversation_key,
+                        original_prompt=chat_prompt,
+                        template_prompt=template_prompt,
+                        reason=followup_resolution.reason,
+                    )
+                    self._log_followup_resolution(
+                        event="followup_pending_set",
+                        history_count=len(followup_history_context),
+                        source_count=len(source_context),
+                        used_context=followup_resolution.used_context,
+                        reason=followup_resolution.reason,
+                        prompt_len=len(chat_prompt),
+                        resolved_len=len(template_prompt),
+                        confidence=followup_resolution.confidence,
+                    )
+                    reply_target = resolve_reply_target(parsed, self._settings)
+                    clarification_text = (
+                        followup_resolution.clarification_text
+                        or "Who are you referring to?"
+                    )
+                    self._log_followup_resolution(
+                        event="followup_resolution_clarify",
+                        history_count=len(followup_history_context),
+                        source_count=len(source_context),
+                        used_context=followup_resolution.used_context,
+                        reason=followup_resolution.reason,
+                        prompt_len=len(chat_prompt),
+                        resolved_len=len(followup_resolution.resolved_prompt),
+                        confidence=followup_resolution.confidence,
+                    )
+                    background_tasks.add_task(
+                        self._safe_send_text,
+                        parsed,
+                        clarification_text,
+                        reply_target,
+                    )
+                    self._log_search_route(
+                        message_scope=message_scope,
+                        mention_eligible=True,
+                        slash_command=None,
+                        auto_decision=None,
+                        final_path="search_clarify",
+                        reason="followup_clarification",
+                    )
+                    return {
+                        "status": "accepted",
+                        "reason": "search_followup_clarification",
+                    }
+
+                resolved_prompt = followup_resolution.resolved_prompt or chat_prompt
+                self._log_followup_resolution(
+                    event="followup_resolution_resolved",
+                    history_count=len(followup_history_context),
+                    source_count=len(source_context),
+                    used_context=followup_resolution.used_context,
+                    reason=followup_resolution.reason,
+                    prompt_len=len(chat_prompt),
+                    resolved_len=len(resolved_prompt),
+                    confidence=followup_resolution.confidence,
+                )
+
+            decision = await self._search_service.decide_auto_search(resolved_prompt)
+            if decision.should_search and is_search_mode_enabled(
+                decision.mode, self._settings
+            ):
+                self._search_service.clear_pending_followup_state(
+                    conversation_key=conversation_key,
+                )
+                if decision.mode == "images":
+                    self._log_search_route(
+                        message_scope=message_scope,
+                        mention_eligible=True,
+                        slash_command=None,
+                        auto_decision=decision,
+                        final_path="search_image",
+                        reason="search_image_queued",
+                    )
+                    background_tasks.add_task(
+                        self._process_search_image,
+                        parsed,
+                        decision.query,
+                    )
+                    return {"status": "accepted", "reason": "search_image_queued"}
+
+                self._log_search_route(
+                    message_scope=message_scope,
+                    mention_eligible=True,
+                    slash_command=None,
+                    auto_decision=decision,
+                    final_path="search_summary",
+                    reason="search_queued",
+                )
+                background_tasks.add_task(
+                    self._process_search_summary,
+                    parsed,
+                    decision.mode,
+                    decision.query,
+                    summary_user_request,
+                )
+                return {"status": "accepted", "reason": "search_queued"}
+
+            self._log_search_route(
+                message_scope=message_scope,
+                mention_eligible=True,
+                slash_command=None,
+                auto_decision=decision,
+                final_path="chat",
+                reason="search_not_selected",
+            )
+
+        self._log_search_route(
+            message_scope=message_scope,
+            mention_eligible=True,
+            slash_command=None,
+            auto_decision=None,
+            final_path="chat",
+            reason="chat_queued",
+        )
         background_tasks.add_task(self.handle_chat_mention, parsed, chat_prompt)
         return {"status": "accepted", "reason": "chat_queued"}
+
+    def handle_search_command(
+        self,
+        message: IncomingMessage,
+        mode: SearchMode,
+        query: str,
+        background_tasks: BackgroundTasks,
+    ) -> dict[str, str]:
+        if not self._settings.bot_search_enabled or self._search_service is None:
+            reply_target = resolve_reply_target(message, self._settings)
+            background_tasks.add_task(
+                self._safe_send_text,
+                message,
+                "Search is disabled on this bot.",
+                reply_target,
+            )
+            return {"status": "accepted", "reason": "search_disabled"}
+
+        if not is_search_mode_enabled(mode, self._settings):
+            reply_target = resolve_reply_target(message, self._settings)
+            background_tasks.add_task(
+                self._safe_send_text,
+                message,
+                f"/{mode} is disabled on this bot.",
+                reply_target,
+            )
+            return {"status": "accepted", "reason": "search_mode_disabled"}
+
+        if not query:
+            reply_target = resolve_reply_target(message, self._settings)
+            background_tasks.add_task(
+                self._safe_send_text,
+                message,
+                f"Usage: /{mode} <query>",
+                reply_target,
+            )
+            return {"status": "accepted", "reason": "search_usage_sent"}
+
+        if len(query) > self._settings.bot_max_prompt_chars:
+            reply_target = resolve_reply_target(message, self._settings)
+            background_tasks.add_task(
+                self._safe_send_text,
+                message,
+                (
+                    "Prompt too long. Maximum is "
+                    f"{self._settings.bot_max_prompt_chars} characters."
+                ),
+                reply_target,
+            )
+            return {"status": "accepted", "reason": "search_prompt_too_long"}
+
+        if mode == "images":
+            background_tasks.add_task(self._process_search_image, message, query)
+            return {"status": "accepted", "reason": "search_image_queued"}
+
+        background_tasks.add_task(self._process_search_summary, message, mode, query)
+        return {"status": "accepted", "reason": "search_queued"}
+
+    def handle_source_command(
+        self,
+        message: IncomingMessage,
+        claim: str,
+        background_tasks: BackgroundTasks,
+    ) -> dict[str, str]:
+        if not self._settings.bot_search_enabled or self._search_service is None:
+            reply_target = resolve_reply_target(message, self._settings)
+            background_tasks.add_task(
+                self._safe_send_text,
+                message,
+                "Search is disabled on this bot.",
+                reply_target,
+            )
+            return {"status": "accepted", "reason": "search_disabled"}
+
+        background_tasks.add_task(self._process_source_lookup, message, claim)
+        return {"status": "accepted", "reason": "source_queued"}
 
     def handle_imagine_command(
         self,
@@ -255,6 +708,130 @@ class WebhookHandler:
                 reply_target,
             )
 
+    async def _process_search_summary(
+        self,
+        message: IncomingMessage,
+        mode: SearchMode,
+        query: str,
+        user_request: str | None = None,
+    ) -> None:
+        if self._search_service is None:
+            return
+
+        reply_target = resolve_reply_target(message, self._settings)
+        fallback_recipient = (
+            message.sender if reply_target.group_id is not None else None
+        )
+        conversation_key = conversation_key_for_message(message)
+        history_context = build_search_summary_history_context(
+            chat_context=self._chat_context,
+            conversation_key=conversation_key,
+            enabled=self._settings.bot_search_use_history_for_summary,
+        )
+
+        try:
+            summary = await self._search_service.summarize_search(
+                conversation_key=conversation_key,
+                mode=mode,
+                query=query,
+                user_request=user_request,
+                history_context=history_context,
+            )
+            if self._settings.bot_chat_force_plain_text:
+                summary = coerce_plain_text_reply(summary)
+            summary = _truncate_reply(summary)
+            await self._signal_client.send_text(
+                target=reply_target,
+                message=summary,
+                fallback_recipient=fallback_recipient,
+            )
+            self._chat_context.append_turn(
+                conversation_key,
+                user_text=user_request or query,
+                assistant_text=summary,
+            )
+        except SearchError as exc:
+            await self._safe_send_text(message, exc.user_message, reply_target)
+        except SignalSendError:
+            logger.exception(
+                "signal_send_error sender=%s group_id=%s",
+                message.sender,
+                message.target.group_id,
+            )
+        except Exception:
+            logger.exception("unexpected_search_error sender=%s", message.sender)
+            await self._safe_send_text(
+                message,
+                "Unexpected error while running search.",
+                reply_target,
+            )
+
+    async def _process_search_image(self, message: IncomingMessage, query: str) -> None:
+        if self._search_service is None:
+            return
+
+        reply_target = resolve_reply_target(message, self._settings)
+        conversation_key = conversation_key_for_message(message)
+
+        try:
+            image_bytes, content_type = await self._search_service.search_image(
+                conversation_key=conversation_key,
+                query=query,
+            )
+            await self._signal_client.send_image(
+                target=reply_target,
+                image_bytes=image_bytes,
+                content_type=content_type,
+                caption=f"/images {query}"[:200],
+            )
+        except SearchError as exc:
+            await self._safe_send_text(message, exc.user_message, reply_target)
+        except SignalSendError:
+            logger.exception(
+                "signal_send_error sender=%s group_id=%s",
+                message.sender,
+                message.target.group_id,
+            )
+        except Exception:
+            logger.exception("unexpected_search_image_error sender=%s", message.sender)
+            await self._safe_send_text(
+                message,
+                "Unexpected error while searching images.",
+                reply_target,
+            )
+
+    async def _process_source_lookup(
+        self, message: IncomingMessage, claim: str
+    ) -> None:
+        if self._search_service is None:
+            return
+
+        reply_target = resolve_reply_target(message, self._settings)
+        conversation_key = conversation_key_for_message(message)
+
+        try:
+            response_text = self._search_service.source_reply(
+                conversation_key=conversation_key,
+                claim=claim,
+            )
+            await self._signal_client.send_text(
+                target=reply_target,
+                message=response_text,
+            )
+        except SignalSendError:
+            logger.exception(
+                "signal_send_error sender=%s group_id=%s",
+                message.sender,
+                message.target.group_id,
+            )
+        except Exception:
+            logger.exception("unexpected_source_lookup_error sender=%s", message.sender)
+            await self._safe_send_text(
+                message,
+                "Unexpected error while resolving sources.",
+                reply_target,
+            )
+
     async def _safe_send_text(
         self,
         message: IncomingMessage,
@@ -270,6 +847,74 @@ class WebhookHandler:
                 message.target.group_id,
             )
 
+    def _clear_pending_followup_state(self, message: IncomingMessage) -> None:
+        if self._search_service is None:
+            return
+        self._search_service.clear_pending_followup_state(
+            conversation_key=conversation_key_for_message(message),
+        )
+
+    def _log_search_route(
+        self,
+        *,
+        message_scope: str,
+        mention_eligible: bool,
+        slash_command: str | None,
+        auto_decision: SearchRouteDecision | None,
+        final_path: str,
+        reason: str,
+    ) -> None:
+        if not self._settings.bot_search_debug_logging:
+            return
+
+        auto_should_search = auto_decision.should_search if auto_decision else False
+        auto_mode = auto_decision.mode if auto_decision else "-"
+        auto_query_len = len(auto_decision.query) if auto_decision else 0
+        auto_reason = (auto_decision.reason if auto_decision else "").strip() or "-"
+        logger.info(
+            "search_route_debug scope=%s mention_eligible=%s "
+            "search_context_mode=%s slash_command=%s auto_should_search=%s "
+            "auto_mode=%s auto_query_len=%d auto_reason=%s final_path=%s reason=%s",
+            message_scope,
+            mention_eligible,
+            self._settings.bot_search_context_mode,
+            slash_command or "-",
+            auto_should_search,
+            auto_mode,
+            auto_query_len,
+            auto_reason,
+            final_path,
+            reason,
+        )
+
+    def _log_followup_resolution(
+        self,
+        *,
+        event: str,
+        history_count: int,
+        source_count: int,
+        used_context: bool,
+        reason: str,
+        prompt_len: int,
+        resolved_len: int,
+        confidence: float | None,
+    ) -> None:
+        if not self._settings.bot_search_debug_logging:
+            return
+        logger.info(
+            "followup_resolution_debug event=%s history_count=%d source_count=%d "
+            "used_context=%s reason=%s prompt_len=%d resolved_len=%d "
+            "confidence_bucket=%s",
+            event,
+            history_count,
+            source_count,
+            used_context,
+            reason or "-",
+            prompt_len,
+            resolved_len,
+            confidence_bucket_for_log(confidence),
+        )
+
 
 def parse_imagine_prompt(text: str) -> str | None:
     stripped = text.strip()
@@ -278,6 +923,49 @@ def parse_imagine_prompt(text: str) -> str | None:
 
     tail = stripped[len(COMMAND_PREFIX) :]
     return tail.strip()
+
+
+def parse_search_command(text: str) -> tuple[SearchMode, str] | None:
+    stripped = text.strip()
+    for command, mode in SEARCH_COMMANDS.items():
+        if stripped == command:
+            return mode, ""
+        if stripped.startswith(f"{command} "):
+            return mode, stripped[len(command) :].strip()
+    return None
+
+
+def parse_source_command(text: str) -> str | None:
+    stripped = text.strip()
+    if stripped == "/source":
+        return ""
+    if stripped.startswith("/source "):
+        return stripped[len("/source") :].strip()
+    return None
+
+
+def parse_source_request_text(text: str) -> str | None:
+    stripped = text.strip()
+    if not stripped:
+        return None
+
+    patterns = (
+        re.compile(
+            r"^(?:source|sources|link|links)\s*(?:for|to)?\s*(.*)$", re.IGNORECASE
+        ),
+        re.compile(
+            r"^where did you get (?:that|this|it|those|these)?\s*(.*)$", re.IGNORECASE
+        ),
+        re.compile(r"^what(?:'s| is) the source(?: for)?\s*(.*)$", re.IGNORECASE),
+    )
+    for pattern in patterns:
+        if match := pattern.match(stripped):
+            return match.group(1).strip(" ?.!,:;")
+    return None
+
+
+def normalized_command_text(message: IncomingMessage, settings: Settings) -> str:
+    return normalize_chat_prompt(message, settings)
 
 
 def should_handle_chat_mention(message: IncomingMessage, settings: Settings) -> bool:
@@ -350,6 +1038,61 @@ def conversation_key_for_message(message: IncomingMessage) -> str:
     return f"dm:{message.sender}"
 
 
+def build_search_summary_history_context(
+    *,
+    chat_context: ChatContextStore,
+    conversation_key: str,
+    enabled: bool,
+) -> list[dict[str, str]] | None:
+    if not enabled:
+        return None
+
+    history = chat_context.get_history(conversation_key)
+    recent_messages = history[-4:]
+    return [
+        {"role": turn.role, "content": turn.content}
+        for turn in recent_messages
+        if turn.role in {"user", "assistant"} and turn.content.strip()
+    ]
+
+
+def build_followup_resolution_history_context(
+    *,
+    chat_context: ChatContextStore,
+    conversation_key: str,
+) -> list[dict[str, str]]:
+    history = chat_context.get_history(conversation_key)
+    recent_messages = history[-4:]
+    return [
+        {"role": turn.role, "content": turn.content}
+        for turn in recent_messages
+        if turn.role in {"user", "assistant"} and turn.content.strip()
+    ]
+
+
+def is_pending_followup_reply_candidate(text: str) -> bool:
+    normalized = " ".join(text.split()).strip()
+    if not normalized:
+        return False
+    if normalized.startswith("/"):
+        return False
+    if len(normalized) > 80:
+        return False
+    return len(normalized.split()) <= 6
+
+
+def is_search_mode_enabled(mode: SearchMode, settings: Settings) -> bool:
+    if mode == "search":
+        return settings.bot_search_mode_search_enabled
+    if mode == "news":
+        return settings.bot_search_mode_news_enabled
+    if mode == "wiki":
+        return settings.bot_search_mode_wiki_enabled
+    if mode == "images":
+        return settings.bot_search_mode_images_enabled
+    return False
+
+
 def _chat_usage_message(message: IncomingMessage) -> str:
     if message.target.group_id is None:
         return "Send a prompt, for example: summarize today's discussion."
@@ -360,6 +1103,16 @@ def _truncate_reply(text: str) -> str:
     if len(text) <= CHAT_MAX_REPLY_CHARS:
         return text
     return f"{text[:CHAT_MAX_REPLY_CHARS].rstrip()}..."
+
+
+def confidence_bucket_for_log(confidence: float | None) -> str:
+    if confidence is None:
+        return "-"
+    if confidence >= 0.9:
+        return "high"
+    if confidence >= 0.7:
+        return "medium"
+    return "low"
 
 
 def build_router(handler: WebhookHandler) -> APIRouter:
