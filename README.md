@@ -252,7 +252,7 @@ Optional image mode:
 
 ```bash
 uv run ruff check .
-uv run ruff format .
+uv run ruff format . && ./scripts/format.sh
 uv run ty check .
 uv run pytest
 uv build
