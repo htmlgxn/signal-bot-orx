@@ -15,7 +15,9 @@ from signal_bot_orx.search_client import SearchClient
 from signal_bot_orx.search_context import SearchContextStore
 from signal_bot_orx.search_service import SearchService
 from signal_bot_orx.signal_client import SignalClient
+from signal_bot_orx.telegram_client import TelegramClient
 from signal_bot_orx.webhook import WebhookHandler, build_router
+from signal_bot_orx.whatsapp_client import WhatsAppClient
 
 
 def create_app(settings: Settings) -> FastAPI:
@@ -28,11 +30,26 @@ def create_app(settings: Settings) -> FastAPI:
 
     app = FastAPI(title="signal-bot-orx", version="2.0", lifespan=lifespan)
 
-    signal_client = SignalClient(
-        base_url=settings.signal_api_base_url,
-        sender_number=settings.signal_sender_number,
-        http_client=http_client,
-    )
+    signal_client: SignalClient | None = None
+    if settings.signal_enabled:
+        signal_client = SignalClient(
+            base_url=settings.signal_api_base_url,
+            sender_number=settings.signal_sender_number,
+            http_client=http_client,
+        )
+    whatsapp_client: WhatsAppClient | None = None
+    if settings.whatsapp_enabled and settings.whatsapp_bridge_base_url:
+        whatsapp_client = WhatsAppClient(
+            base_url=settings.whatsapp_bridge_base_url,
+            http_client=http_client,
+            token=settings.whatsapp_bridge_token,
+        )
+    telegram_client: TelegramClient | None = None
+    if settings.telegram_enabled and settings.telegram_bot_token:
+        telegram_client = TelegramClient(
+            bot_token=settings.telegram_bot_token,
+            http_client=http_client,
+        )
     openrouter_client = OpenRouterClient(
         api_key=settings.openrouter_chat_api_key,
         model=settings.openrouter_model,
@@ -74,6 +91,8 @@ def create_app(settings: Settings) -> FastAPI:
     handler = WebhookHandler(
         settings=settings,
         signal_client=signal_client,
+        whatsapp_client=whatsapp_client,
+        telegram_client=telegram_client,
         openrouter_client=openrouter_client,
         openrouter_image_client=openrouter_image_client,
         chat_context=chat_context,

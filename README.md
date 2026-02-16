@@ -15,6 +15,8 @@ Primary behavior:
 ## Features
 
 - Handles incoming Signal webhooks (`POST /webhook/signal`).
+- Optional WhatsApp bridge webhooks (`POST /webhook/whatsapp`) when enabled.
+- Optional Telegram webhooks (`POST /webhook/telegram`) when enabled.
 - Enforces number/group allowlists unless auth bypass is explicitly enabled.
 - Supports metadata mention detection with alias fallback.
 - Maintains and supports customizable in-memory conversation history per group.
@@ -56,14 +58,37 @@ cp .env.example .env
 ```
 
 Required:
+- `OPENROUTER_CHAT_API_KEY`
+
+Enable at least one transport:
+- Signal: `SIGNAL_ENABLED=true` (default)
+- WhatsApp: `WHATSAPP_ENABLED=true`
+- Telegram: `TELEGRAM_ENABLED=true`
+
+Signal required values (when `SIGNAL_ENABLED=true`):
 - `SIGNAL_API_BASE_URL`
 - `SIGNAL_SENDER_NUMBER`
-- `OPENROUTER_CHAT_API_KEY`
 
 Auth/allowlist (set at least one unless `SIGNAL_DISABLE_AUTH=true`):
 - `SIGNAL_ALLOWED_NUMBER`
 - `SIGNAL_ALLOWED_NUMBERS`
 - `SIGNAL_ALLOWED_GROUP_IDS`
+
+Optional WhatsApp bridge:
+- `WHATSAPP_ENABLED` (default: `false`)
+- `WHATSAPP_BRIDGE_BASE_URL` (required when enabled)
+- `WHATSAPP_BRIDGE_TOKEN` (optional bearer token)
+- `WHATSAPP_ALLOWED_NUMBERS` (required unless `WHATSAPP_DISABLE_AUTH=true`)
+- `WHATSAPP_DISABLE_AUTH` (default: `false`)
+
+Optional Telegram transport:
+- `TELEGRAM_ENABLED` (default: `false`)
+- `TELEGRAM_BOT_TOKEN` (required when enabled)
+- `TELEGRAM_WEBHOOK_SECRET` (optional, validates `X-Telegram-Bot-Api-Secret-Token`)
+- `TELEGRAM_ALLOWED_USER_IDS` (required unless `TELEGRAM_DISABLE_AUTH=true`)
+- `TELEGRAM_ALLOWED_CHAT_IDS` (optional group allowlist)
+- `TELEGRAM_DISABLE_AUTH` (default: `false`)
+- `TELEGRAM_BOT_USERNAME` (optional, used for group mention/reply detection)
 
 Chat options:
 - `OPENROUTER_MODEL` (default: `openai/gpt-4o-mini`)
@@ -159,6 +184,8 @@ uv run signal-bot-orx
 Endpoints:
 - `GET /healthz`
 - `POST /webhook/signal`
+- `POST /webhook/whatsapp` (only active when `WHATSAPP_ENABLED=true`)
+- `POST /webhook/telegram` (only active when `TELEGRAM_ENABLED=true`)
 
 If you skip exporting `.env`, startup will fail with missing required
 environment variable errors.
@@ -166,6 +193,17 @@ environment variable errors.
 Configure `signal-cli-rest-api` callback target:
 
 `http://<BOT_WEBHOOK_HOST>:<BOT_WEBHOOK_PORT>/webhook/signal`
+
+Configure Telegram webhook manually:
+
+```bash
+curl -sS "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
+  -d "url=https://<YOUR_PUBLIC_HOST>/webhook/telegram" \
+  -d 'allowed_updates=["message","edited_message"]' \
+  -d "secret_token=${TELEGRAM_WEBHOOK_SECRET}"
+```
+
+Group behavior on Telegram: the bot responds only when mentioned (`@<bot_username>`) or when users reply to the bot.
 
 ## Usage
 

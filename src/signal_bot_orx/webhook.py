@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import Literal
 
-from fastapi import APIRouter, BackgroundTasks
+from fastapi import APIRouter, BackgroundTasks, Header
 
 from signal_bot_orx.chat_context import ChatContextStore
 from signal_bot_orx.chat_prompt import build_chat_messages, coerce_plain_text_reply
@@ -22,14 +23,16 @@ from signal_bot_orx.search_service import (
     build_followup_template_prompt,
 )
 from signal_bot_orx.signal_client import SignalClient, SignalSendError
+from signal_bot_orx.telegram_client import TelegramClient, TelegramSendError
 from signal_bot_orx.types import (
     IncomingMessage,
     Target,
     dedupe_key,
     metadata_mentions_bot,
-    parse_signal_webhook,
+    parse_incoming_webhook,
     strip_mention_spans,
 )
+from signal_bot_orx.whatsapp_client import WhatsAppClient, WhatsAppSendError
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +52,9 @@ class WebhookHandler:
         self,
         *,
         settings: Settings,
-        signal_client: SignalClient,
+        signal_client: SignalClient | None,
+        whatsapp_client: WhatsAppClient | None = None,
+        telegram_client: TelegramClient | None = None,
         openrouter_client: OpenRouterClient,
         openrouter_image_client: OpenRouterImageClient | None,
         chat_context: ChatContextStore,
@@ -58,6 +63,8 @@ class WebhookHandler:
     ) -> None:
         self._settings = settings
         self._signal_client = signal_client
+        self._whatsapp_client = whatsapp_client
+        self._telegram_client = telegram_client
         self._openrouter_client = openrouter_client
         self._openrouter_image_client = openrouter_image_client
         self._chat_context = chat_context
@@ -65,9 +72,27 @@ class WebhookHandler:
         self._dedupe = dedupe
 
     async def handle_webhook(
-        self, payload: dict[str, object], background_tasks: BackgroundTasks
+        self,
+        payload: dict[str, object],
+        background_tasks: BackgroundTasks,
+        *,
+        transport_hint: Literal["signal", "whatsapp", "telegram"] | None = None,
+        telegram_secret: str | None = None,
     ) -> dict[str, str]:
-        parsed = parse_signal_webhook(payload)
+        if transport_hint == "telegram":
+            if not self._settings.telegram_enabled or self._telegram_client is None:
+                return {"status": "ignored", "reason": "telegram_disabled"}
+            if not is_valid_telegram_secret(
+                provided_secret=telegram_secret,
+                expected_secret=self._settings.telegram_webhook_secret,
+            ):
+                return {"status": "ignored", "reason": "invalid_telegram_secret"}
+
+        parsed = parse_incoming_webhook(
+            payload,
+            telegram_bot_username=self._settings.telegram_bot_username,
+            transport_hint=transport_hint,
+        )
         if parsed is None:
             logger.debug(
                 "unsupported_event method_present=%s top_level_key_count=%d",
@@ -83,6 +108,22 @@ class WebhookHandler:
                 reason="unsupported_event",
             )
             return {"status": "ignored", "reason": "unsupported_event"}
+
+        if (
+            parsed.transport == "whatsapp"
+            and (not self._settings.whatsapp_enabled or self._whatsapp_client is None)
+        ):
+            return {"status": "ignored", "reason": "whatsapp_disabled"}
+        if (
+            parsed.transport == "signal"
+            and (not self._settings.signal_enabled or self._signal_client is None)
+        ):
+            return {"status": "ignored", "reason": "signal_disabled"}
+        if (
+            parsed.transport == "telegram"
+            and (not self._settings.telegram_enabled or self._telegram_client is None)
+        ):
+            return {"status": "ignored", "reason": "telegram_disabled"}
 
         message_scope = "group" if parsed.target.group_id is not None else "dm"
         mention_eligible = should_handle_chat_mention(parsed, self._settings)
@@ -670,7 +711,8 @@ class WebhookHandler:
                 reply = "I could not generate a usable plain-text reply. Try again."
 
             normalized_reply = _truncate_reply(reply)
-            await self._signal_client.send_text(
+            await self._send_text(
+                transport=message.transport,
                 target=reply_target,
                 message=normalized_reply,
                 fallback_recipient=fallback_recipient,
@@ -688,7 +730,7 @@ class WebhookHandler:
                 exc,
             )
             await self._safe_send_text(message, exc.user_message, reply_target)
-        except SignalSendError:
+        except (SignalSendError, WhatsAppSendError, TelegramSendError):
             logger.exception(
                 "signal_send_error sender=%s group_id=%s",
                 message.sender,
@@ -727,7 +769,8 @@ class WebhookHandler:
                 model=self._settings.openrouter_image_model,
             )
             for index, (image_bytes, content_type) in enumerate(images):
-                await self._signal_client.send_image(
+                await self._send_image(
+                    transport=message.transport,
                     target=reply_target,
                     image_bytes=image_bytes,
                     content_type=content_type,
@@ -738,7 +781,7 @@ class WebhookHandler:
                 "image_generation_error sender=%s detail=%s", message.sender, exc
             )
             await self._safe_send_text(message, exc.user_message, reply_target)
-        except SignalSendError:
+        except (SignalSendError, WhatsAppSendError, TelegramSendError):
             logger.exception(
                 "signal_send_error sender=%s group_id=%s",
                 message.sender,
@@ -784,7 +827,8 @@ class WebhookHandler:
             if self._settings.bot_chat_force_plain_text:
                 summary = coerce_plain_text_reply(summary)
             summary = _truncate_reply(summary)
-            await self._signal_client.send_text(
+            await self._send_text(
+                transport=message.transport,
                 target=reply_target,
                 message=summary,
                 fallback_recipient=fallback_recipient,
@@ -796,7 +840,7 @@ class WebhookHandler:
             )
         except SearchError as exc:
             await self._safe_send_text(message, exc.user_message, reply_target)
-        except SignalSendError:
+        except (SignalSendError, WhatsAppSendError, TelegramSendError):
             logger.exception(
                 "signal_send_error sender=%s group_id=%s",
                 message.sender,
@@ -822,7 +866,8 @@ class WebhookHandler:
                 conversation_key=conversation_key,
                 query=query,
             )
-            await self._signal_client.send_image(
+            await self._send_image(
+                transport=message.transport,
                 target=reply_target,
                 image_bytes=image_bytes,
                 content_type=content_type,
@@ -830,7 +875,7 @@ class WebhookHandler:
             )
         except SearchError as exc:
             await self._safe_send_text(message, exc.user_message, reply_target)
-        except SignalSendError:
+        except (SignalSendError, WhatsAppSendError, TelegramSendError):
             logger.exception(
                 "signal_send_error sender=%s group_id=%s",
                 message.sender,
@@ -860,13 +905,14 @@ class WebhookHandler:
                 conversation_key=conversation_key,
                 query=query,
             )
-            await self._signal_client.send_text(
+            await self._send_text(
+                transport=message.transport,
                 target=reply_target,
                 message=_truncate_reply(response_text),
             )
         except SearchError as exc:
             await self._safe_send_text(message, exc.user_message, reply_target)
-        except SignalSendError:
+        except (SignalSendError, WhatsAppSendError, TelegramSendError):
             logger.exception(
                 "signal_send_error sender=%s group_id=%s",
                 message.sender,
@@ -909,7 +955,8 @@ class WebhookHandler:
             )
             video_text = _truncate_reply(f"{title}\n{url}")
             if image_bytes is not None and content_type is not None:
-                await self._signal_client.send_image(
+                await self._send_image(
+                    transport=message.transport,
                     target=reply_target,
                     image_bytes=image_bytes,
                     content_type=content_type,
@@ -917,14 +964,15 @@ class WebhookHandler:
                 )
                 return
 
-            await self._signal_client.send_text(
+            await self._send_text(
+                transport=message.transport,
                 target=reply_target,
                 message=video_text,
                 fallback_recipient=fallback_recipient,
             )
         except SearchError as exc:
             await self._safe_send_text(message, exc.user_message, reply_target)
-        except SignalSendError:
+        except (SignalSendError, WhatsAppSendError, TelegramSendError):
             logger.exception(
                 "signal_send_error sender=%s group_id=%s",
                 message.sender,
@@ -954,11 +1002,12 @@ class WebhookHandler:
                 conversation_key=conversation_key,
                 claim=claim,
             )
-            await self._signal_client.send_text(
+            await self._send_text(
+                transport=message.transport,
                 target=reply_target,
                 message=response_text,
             )
-        except SignalSendError:
+        except (SignalSendError, WhatsAppSendError, TelegramSendError):
             logger.exception(
                 "signal_send_error sender=%s group_id=%s",
                 message.sender,
@@ -972,6 +1021,71 @@ class WebhookHandler:
                 reply_target,
             )
 
+    async def _send_text(
+        self,
+        *,
+        transport: Literal["signal", "whatsapp", "telegram"],
+        target: Target,
+        message: str,
+        fallback_recipient: str | None = None,
+    ) -> None:
+        if transport == "whatsapp":
+            if self._whatsapp_client is None:
+                raise WhatsAppSendError("WhatsApp is not configured.")
+            await self._whatsapp_client.send_text(target=target, message=message)
+            return
+
+        if transport == "telegram":
+            if self._telegram_client is None:
+                raise TelegramSendError("Telegram is not configured.")
+            await self._telegram_client.send_text(target=target, message=message)
+            return
+
+        if self._signal_client is None:
+            raise SignalSendError("Signal is not configured.")
+        await self._signal_client.send_text(
+            target=target, message=message, fallback_recipient=fallback_recipient
+        )
+
+    async def _send_image(
+        self,
+        *,
+        transport: Literal["signal", "whatsapp", "telegram"],
+        target: Target,
+        image_bytes: bytes,
+        content_type: str,
+        caption: str | None = None,
+        fallback_recipient: str | None = None,
+    ) -> None:
+        del fallback_recipient
+        if transport == "whatsapp":
+            if self._whatsapp_client is None:
+                raise WhatsAppSendError("WhatsApp is not configured.")
+            await self._whatsapp_client.send_image(
+                target=target,
+                image_bytes=image_bytes,
+                content_type=content_type,
+                caption=caption,
+            )
+            return
+
+        if transport == "telegram":
+            if self._telegram_client is None:
+                raise TelegramSendError("Telegram is not configured.")
+            await self._telegram_client.send_image(
+                target=target,
+                image_bytes=image_bytes,
+                content_type=content_type,
+                caption=caption,
+            )
+            return
+
+        if self._signal_client is None:
+            raise SignalSendError("Signal is not configured.")
+        await self._signal_client.send_image(
+            target=target, image_bytes=image_bytes, content_type=content_type, caption=caption
+        )
+
     async def _safe_send_text(
         self,
         message: IncomingMessage,
@@ -979,8 +1093,12 @@ class WebhookHandler:
         reply_target: Target,
     ) -> None:
         try:
-            await self._signal_client.send_text(target=reply_target, message=text)
-        except SignalSendError:
+            await self._send_text(
+                transport=message.transport,
+                target=reply_target,
+                message=text,
+            )
+        except (SignalSendError, WhatsAppSendError, TelegramSendError):
             logger.exception(
                 "signal_send_text_failed sender=%s group_id=%s",
                 message.sender,
@@ -1119,7 +1237,10 @@ def should_handle_chat_mention(message: IncomingMessage, settings: Settings) -> 
     if message.target.group_id is None:
         return True
 
-    if metadata_mentions_bot(
+    if message.transport == "telegram":
+        return message.directed_to_bot
+
+    if message.transport == "signal" and metadata_mentions_bot(
         message,
         settings.signal_sender_number,
         settings.signal_sender_uuid,
@@ -1131,12 +1252,19 @@ def should_handle_chat_mention(message: IncomingMessage, settings: Settings) -> 
 
 def normalize_chat_prompt(message: IncomingMessage, settings: Settings) -> str:
     text = message.text
-    if metadata_mentions_bot(
-        message,
-        settings.signal_sender_number,
-        settings.signal_sender_uuid,
+    if (
+        message.transport == "signal"
+        and settings.signal_enabled
+        and metadata_mentions_bot(
+            message,
+            settings.signal_sender_number,
+            settings.signal_sender_uuid,
+        )
     ):
         text = strip_mention_spans(text, message.mentions)
+
+    if message.transport == "telegram" and settings.telegram_bot_username:
+        text = strip_aliases(text, (f"@{settings.telegram_bot_username}",))
 
     text = strip_aliases(text, settings.bot_mention_aliases)
     text = " ".join(text.split())
@@ -1160,12 +1288,23 @@ def _alias_pattern(alias: str) -> re.Pattern[str]:
 
 
 def is_authorized_message(message: IncomingMessage, settings: Settings) -> bool:
+    if message.transport == "telegram":
+        if settings.telegram_disable_auth:
+            return True
+        if message.sender in settings.telegram_allowed_user_ids:
+            return True
+        group_id = message.target.group_id
+        return group_id is not None and group_id in settings.telegram_allowed_chat_ids
+
+    if message.transport == "whatsapp":
+        if settings.whatsapp_disable_auth:
+            return True
+        return message.sender in settings.whatsapp_allowed_numbers
+
     if settings.signal_disable_auth:
         return True
-
     if message.sender in settings.signal_allowed_numbers:
         return True
-
     group_id = message.target.group_id
     return group_id is not None and group_id in settings.signal_allowed_group_ids
 
@@ -1277,6 +1416,16 @@ def confidence_bucket_for_log(confidence: float | None) -> str:
     return "low"
 
 
+def is_valid_telegram_secret(
+    *, provided_secret: str | None, expected_secret: str | None
+) -> bool:
+    if not expected_secret:
+        return True
+    if provided_secret is None:
+        return False
+    return provided_secret == expected_secret
+
+
 def build_router(handler: WebhookHandler) -> APIRouter:
     router = APIRouter()
 
@@ -1285,6 +1434,32 @@ def build_router(handler: WebhookHandler) -> APIRouter:
         payload: dict[str, object],
         background_tasks: BackgroundTasks,
     ) -> dict[str, str]:
-        return await handler.handle_webhook(payload, background_tasks)
+        return await handler.handle_webhook(
+            payload, background_tasks, transport_hint="signal"
+        )
+
+    @router.post("/webhook/whatsapp")
+    async def whatsapp_webhook(
+        payload: dict[str, object],
+        background_tasks: BackgroundTasks,
+    ) -> dict[str, str]:
+        return await handler.handle_webhook(
+            payload, background_tasks, transport_hint="whatsapp"
+        )
+
+    @router.post("/webhook/telegram")
+    async def telegram_webhook(
+        payload: dict[str, object],
+        background_tasks: BackgroundTasks,
+        telegram_secret: str | None = Header(
+            default=None, alias="X-Telegram-Bot-Api-Secret-Token"
+        ),
+    ) -> dict[str, str]:
+        return await handler.handle_webhook(
+            payload,
+            background_tasks,
+            transport_hint="telegram",
+            telegram_secret=telegram_secret,
+        )
 
     return router

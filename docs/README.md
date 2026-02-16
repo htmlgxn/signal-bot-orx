@@ -25,10 +25,17 @@ cp .env.example .env
 Minimum required values:
 
 ```bash
+OPENROUTER_CHAT_API_KEY=sk-or-...
+```
+
+Enable at least one transport (`SIGNAL_ENABLED`, `WHATSAPP_ENABLED`, or `TELEGRAM_ENABLED`).
+
+If Signal is enabled (default):
+
+```bash
 SIGNAL_API_BASE_URL=http://127.0.0.1:8080
 SIGNAL_SENDER_NUMBER=+15550001111
 SIGNAL_ALLOWED_GROUP_IDS=group-id-1
-OPENROUTER_CHAT_API_KEY=sk-or-...
 ```
 
 Optional image mode:
@@ -68,6 +75,22 @@ BOT_SEARCH_IMAGES_MAX_RESULTS=3
 BOT_SEARCH_VIDEOS_MAX_RESULTS=5
 BOT_SEARCH_TIMEOUT_SECONDS=8
 BOT_SEARCH_SOURCE_TTL_SECONDS=1800
+
+# Optional WhatsApp bridge (whatsapp-web.js)
+WHATSAPP_ENABLED=false
+WHATSAPP_BRIDGE_BASE_URL=http://127.0.0.1:3001
+WHATSAPP_BRIDGE_TOKEN=
+WHATSAPP_ALLOWED_NUMBERS=
+WHATSAPP_DISABLE_AUTH=false
+
+# Optional Telegram webhook
+TELEGRAM_ENABLED=false
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_WEBHOOK_SECRET=
+TELEGRAM_ALLOWED_USER_IDS=
+TELEGRAM_ALLOWED_CHAT_IDS=
+TELEGRAM_DISABLE_AUTH=false
+TELEGRAM_BOT_USERNAME=
 ```
 
 Notes:
@@ -115,6 +138,20 @@ Code default bind host is `127.0.0.1`. `.env.example` uses `BOT_WEBHOOK_HOST=0.0
 Examples:
 - `http://127.0.0.1:8001/webhook/signal`
 - `http://192.168.1.20:8001/webhook/signal`
+
+If WhatsApp is enabled, configure your bridge webhook to:
+- `http://<BOT_HOST>:8001/webhook/whatsapp`
+
+If Telegram is enabled, configure webhook manually:
+
+```bash
+curl -sS "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/setWebhook" \
+  -d "url=https://<YOUR_PUBLIC_HOST>/webhook/telegram" \
+  -d 'allowed_updates=["message","edited_message"]' \
+  -d "secret_token=${TELEGRAM_WEBHOOK_SECRET}"
+```
+
+Telegram group behavior: replies are mention/reply-only.
 
 ## 6. Validate behavior
 

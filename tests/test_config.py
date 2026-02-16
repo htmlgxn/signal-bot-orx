@@ -13,6 +13,7 @@ from signal_bot_orx.config import (
 @pytest.fixture(autouse=True)
 def clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
     keys = [
+        "SIGNAL_ENABLED",
         "SIGNAL_API_BASE_URL",
         "SIGNAL_SENDER_NUMBER",
         "SIGNAL_SENDER_UUID",
@@ -20,6 +21,18 @@ def clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "SIGNAL_ALLOWED_NUMBERS",
         "SIGNAL_ALLOWED_GROUP_IDS",
         "SIGNAL_DISABLE_AUTH",
+        "WHATSAPP_ENABLED",
+        "WHATSAPP_BRIDGE_BASE_URL",
+        "WHATSAPP_BRIDGE_TOKEN",
+        "WHATSAPP_ALLOWED_NUMBERS",
+        "WHATSAPP_DISABLE_AUTH",
+        "TELEGRAM_ENABLED",
+        "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_WEBHOOK_SECRET",
+        "TELEGRAM_ALLOWED_USER_IDS",
+        "TELEGRAM_ALLOWED_CHAT_IDS",
+        "TELEGRAM_DISABLE_AUTH",
+        "TELEGRAM_BOT_USERNAME",
         "OPENROUTER_API_KEY",
         "OPENROUTER_CHAT_API_KEY",
         "OPENROUTER_IMAGE_API_KEY",
@@ -226,7 +239,7 @@ def test_settings_fails_without_any_allowlist(
     with pytest.raises(RuntimeError) as exc:
         Settings.from_env()
 
-    assert "Missing allowlist configuration" in str(exc.value)
+    assert "Missing Signal allowlist configuration" in str(exc.value)
 
 
 def test_settings_disable_auth_default_false(
@@ -237,6 +250,27 @@ def test_settings_disable_auth_default_false(
     settings = Settings.from_env()
 
     assert settings.signal_disable_auth is False
+    assert settings.whatsapp_enabled is False
+    assert settings.whatsapp_bridge_base_url is None
+    assert settings.whatsapp_bridge_token is None
+    assert settings.whatsapp_allowed_numbers == frozenset()
+    assert settings.whatsapp_disable_auth is False
+    assert settings.signal_enabled is True
+    assert settings.telegram_enabled is False
+
+
+def test_settings_fails_when_all_transports_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SIGNAL_ENABLED", "false")
+    monkeypatch.setenv("WHATSAPP_ENABLED", "false")
+    monkeypatch.setenv("TELEGRAM_ENABLED", "false")
+    monkeypatch.setenv("OPENROUTER_CHAT_API_KEY", "or-key-chat")
+
+    with pytest.raises(RuntimeError) as exc:
+        Settings.from_env()
+
+    assert "No transports enabled" in str(exc.value)
 
 
 def test_settings_disable_auth_true_allows_no_allowlist(
@@ -252,6 +286,97 @@ def test_settings_disable_auth_true_allows_no_allowlist(
     assert settings.signal_disable_auth is True
     assert settings.signal_allowed_numbers == frozenset()
     assert settings.signal_allowed_group_ids == frozenset()
+
+
+def test_settings_whatsapp_enabled_requires_allowlist_or_disable_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_base_required(monkeypatch)
+    monkeypatch.setenv("WHATSAPP_ENABLED", "true")
+    monkeypatch.setenv("WHATSAPP_BRIDGE_BASE_URL", "http://localhost:3001")
+
+    with pytest.raises(RuntimeError) as exc:
+        Settings.from_env()
+
+    assert "Missing WhatsApp allowlist configuration" in str(exc.value)
+
+
+def test_settings_whatsapp_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_base_required(monkeypatch)
+    monkeypatch.setenv("WHATSAPP_ENABLED", "true")
+    monkeypatch.setenv("WHATSAPP_BRIDGE_BASE_URL", "http://localhost:3001")
+    monkeypatch.setenv("WHATSAPP_BRIDGE_TOKEN", "token")
+    monkeypatch.setenv("WHATSAPP_ALLOWED_NUMBERS", "15550002222,15550003333")
+
+    settings = Settings.from_env()
+
+    assert settings.whatsapp_enabled is True
+    assert settings.whatsapp_bridge_base_url == "http://localhost:3001"
+    assert settings.whatsapp_bridge_token == "token"
+    assert settings.whatsapp_allowed_numbers == frozenset(
+        {"15550002222", "15550003333"}
+    )
+    assert settings.whatsapp_disable_auth is False
+
+
+def test_settings_telegram_enabled_requires_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_base_required(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_ENABLED", "true")
+    monkeypatch.setenv("TELEGRAM_DISABLE_AUTH", "true")
+
+    with pytest.raises(RuntimeError) as exc:
+        Settings.from_env()
+
+    assert "TELEGRAM_BOT_TOKEN" in str(exc.value)
+
+
+def test_settings_telegram_enabled_requires_allowlist_or_disable_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_base_required(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_ENABLED", "true")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
+
+    with pytest.raises(RuntimeError) as exc:
+        Settings.from_env()
+
+    assert "Missing Telegram allowlist configuration" in str(exc.value)
+
+
+def test_settings_telegram_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_base_required(monkeypatch)
+    monkeypatch.setenv("TELEGRAM_ENABLED", "true")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "secret")
+    monkeypatch.setenv("TELEGRAM_ALLOWED_USER_IDS", "12345,67890")
+    monkeypatch.setenv("TELEGRAM_ALLOWED_CHAT_IDS", "-100,-200")
+    monkeypatch.setenv("TELEGRAM_BOT_USERNAME", "@sigbot")
+
+    settings = Settings.from_env()
+
+    assert settings.telegram_enabled is True
+    assert settings.telegram_bot_token == "token"
+    assert settings.telegram_webhook_secret == "secret"
+    assert settings.telegram_allowed_user_ids == frozenset({"12345", "67890"})
+    assert settings.telegram_allowed_chat_ids == frozenset({"-100", "-200"})
+    assert settings.telegram_bot_username == "@sigbot"
+
+
+def test_settings_telegram_only_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SIGNAL_ENABLED", "false")
+    monkeypatch.setenv("TELEGRAM_ENABLED", "true")
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "token")
+    monkeypatch.setenv("TELEGRAM_ALLOWED_USER_IDS", "12345")
+    monkeypatch.setenv("OPENROUTER_CHAT_API_KEY", "or-key-chat")
+
+    settings = Settings.from_env()
+
+    assert settings.signal_enabled is False
+    assert settings.telegram_enabled is True
+    assert settings.signal_api_base_url == ""
+    assert settings.signal_sender_number == ""
 
 
 def test_settings_group_reply_mode_defaults_to_group(

@@ -22,6 +22,7 @@ from signal_bot_orx.types import (
     IncomingMessage,
     MentionSpan,
     Target,
+    parse_incoming_webhook,
     parse_signal_webhook,
 )
 from signal_bot_orx.webhook import (
@@ -144,6 +145,22 @@ def test_parse_signal_webhook_json_rpc_missing_message() -> None:
     assert parse_signal_webhook(payload) is None
 
 
+def test_parse_signal_webhook_accepts_whatsapp_shape() -> None:
+    payload = {
+        "from": "user@c.us",
+        "chatId": "user@c.us",
+        "text": "hello from whatsapp",
+        "timestamp": 1730000000100,
+    }
+
+    parsed = parse_incoming_webhook(payload)
+
+    assert parsed is not None
+    assert parsed.transport == "whatsapp"
+    assert parsed.sender == "user@c.us"
+    assert parsed.text == "hello from whatsapp"
+
+
 def _settings(
     *,
     mode: Literal["group", "dm_fallback"],
@@ -161,6 +178,12 @@ def _settings(
     force_plain_text: bool = True,
     image_api_key: str | None = None,
     image_model: str | None = None,
+    whatsapp_enabled: bool = False,
+    whatsapp_disable_auth: bool = False,
+    signal_enabled: bool = True,
+    telegram_enabled: bool = False,
+    telegram_disable_auth: bool = False,
+    telegram_secret: str | None = None,
 ) -> Settings:
     return Settings(
         signal_api_base_url="http://localhost:8080",
@@ -170,6 +193,7 @@ def _settings(
         signal_allowed_group_ids=frozenset({"group-1"}),
         openrouter_chat_api_key="or-key-chat",
         openrouter_model="openai/gpt-4o-mini",
+        signal_enabled=signal_enabled,
         openrouter_image_api_key=image_api_key,
         openrouter_image_model=image_model,
         bot_search_context_mode=search_context_mode,
@@ -185,6 +209,17 @@ def _settings(
         bot_chat_system_prompt=system_prompt or "default system prompt",
         bot_chat_force_plain_text=force_plain_text,
         bot_mention_aliases=("@bot",),
+        whatsapp_enabled=whatsapp_enabled,
+        whatsapp_bridge_base_url="http://localhost:3001" if whatsapp_enabled else None,
+        whatsapp_allowed_numbers=frozenset({"user@c.us"}),
+        whatsapp_disable_auth=whatsapp_disable_auth,
+        telegram_enabled=telegram_enabled,
+        telegram_bot_token="telegram-token" if telegram_enabled else None,
+        telegram_webhook_secret=telegram_secret,
+        telegram_allowed_user_ids=frozenset({"12345"}),
+        telegram_allowed_chat_ids=frozenset({"-10099"}),
+        telegram_disable_auth=telegram_disable_auth,
+        telegram_bot_username="sigbot",
     )
 
 
@@ -311,6 +346,66 @@ class _FakeSignalClient:
         self.image_captions.append(caption)
         assert image_bytes
         assert content_type == "image/png"
+
+
+class _FakeWhatsAppClient:
+    def __init__(self) -> None:
+        self.text_messages: list[str] = []
+        self.image_captions: list[str | None] = []
+
+    async def send_text(
+        self,
+        *,
+        target: Target,
+        message: str,
+        fallback_recipient: str | None = None,
+    ) -> None:
+        del target, fallback_recipient
+        self.text_messages.append(message)
+
+    async def send_image(
+        self,
+        *,
+        target: Target,
+        image_bytes: bytes,
+        content_type: str,
+        caption: str | None = None,
+        fallback_recipient: str | None = None,
+    ) -> None:
+        del target, fallback_recipient
+        assert image_bytes
+        assert content_type == "image/png"
+        self.image_captions.append(caption)
+
+
+class _FakeTelegramClient:
+    def __init__(self) -> None:
+        self.text_messages: list[str] = []
+        self.image_captions: list[str | None] = []
+
+    async def send_text(
+        self,
+        *,
+        target: Target,
+        message: str,
+        fallback_recipient: str | None = None,
+    ) -> None:
+        del target, fallback_recipient
+        self.text_messages.append(message)
+
+    async def send_image(
+        self,
+        *,
+        target: Target,
+        image_bytes: bytes,
+        content_type: str,
+        caption: str | None = None,
+        fallback_recipient: str | None = None,
+    ) -> None:
+        del target, fallback_recipient
+        assert image_bytes
+        assert content_type == "image/png"
+        self.image_captions.append(caption)
 
 
 class _FakeOpenRouterImageClient:
@@ -711,6 +806,201 @@ async def test_handle_webhook_search_command_queues_summary() -> None:
     assert fake_search.search_user_requests == [None]
     assert fake_search.search_history_contexts == [None]
     assert fake_signal.text_messages == ["summary-only"]
+
+
+@pytest.mark.anyio
+async def test_handle_webhook_whatsapp_search_command_queues_summary() -> None:
+    payload = {
+        "from": "user@c.us",
+        "chatId": "user@c.us",
+        "text": "/search latest openrouter news",
+        "timestamp": 1730000000001,
+    }
+    fake_signal = _FakeSignalClient()
+    fake_whatsapp = _FakeWhatsAppClient()
+    fake_search = _FakeSearchService(summary="summary-only")
+    handler = WebhookHandler(
+        settings=_settings(
+            mode="group",
+            whatsapp_enabled=True,
+            whatsapp_disable_auth=True,
+        ),
+        signal_client=cast(Any, fake_signal),
+        whatsapp_client=cast(Any, fake_whatsapp),
+        openrouter_client=cast(Any, _FakeOpenRouterClient()),
+        chat_context=cast(Any, _FakeChatContextStore()),
+        openrouter_image_client=None,
+        dedupe=DedupeCache(ttl_seconds=60),
+        search_service=cast(Any, fake_search),
+    )
+
+    background_tasks = BackgroundTasks()
+    response = await handler.handle_webhook(payload, background_tasks)
+    await _run_background_tasks(background_tasks)
+
+    assert response == {"status": "accepted", "reason": "search_queued"}
+    assert fake_search.search_calls == [("search", "latest openrouter news")]
+
+
+@pytest.mark.anyio
+async def test_handle_webhook_telegram_dm_search_command_queues_summary() -> None:
+    payload = {
+        "update_id": 1,
+        "message": {
+            "message_id": 12,
+            "date": 1730000000,
+            "text": "/search latest openrouter news",
+            "from": {"id": 12345, "is_bot": False},
+            "chat": {"id": 12345, "type": "private"},
+        },
+    }
+    fake_signal = _FakeSignalClient()
+    fake_telegram = _FakeTelegramClient()
+    fake_search = _FakeSearchService(summary="summary-only")
+    handler = WebhookHandler(
+        settings=_settings(
+            mode="group",
+            telegram_enabled=True,
+            telegram_disable_auth=False,
+            telegram_secret="s3cr3t",
+        ),
+        signal_client=cast(Any, fake_signal),
+        telegram_client=cast(Any, fake_telegram),
+        openrouter_client=cast(Any, _FakeOpenRouterClient()),
+        chat_context=cast(Any, _FakeChatContextStore()),
+        openrouter_image_client=None,
+        dedupe=DedupeCache(ttl_seconds=60),
+        search_service=cast(Any, fake_search),
+    )
+
+    background_tasks = BackgroundTasks()
+    response = await handler.handle_webhook(
+        payload,
+        background_tasks,
+        transport_hint="telegram",
+        telegram_secret="s3cr3t",
+    )
+    await _run_background_tasks(background_tasks)
+
+    assert response == {"status": "accepted", "reason": "search_queued"}
+    assert fake_search.search_calls == [("search", "latest openrouter news")]
+    assert fake_telegram.text_messages == ["summary-only"]
+
+
+@pytest.mark.anyio
+async def test_handle_webhook_telegram_group_requires_direction() -> None:
+    payload = {
+        "update_id": 1,
+        "message": {
+            "message_id": 12,
+            "date": 1730000000,
+            "text": "hello there",
+            "from": {"id": 12345, "is_bot": False},
+            "chat": {"id": -10099, "type": "supergroup"},
+        },
+    }
+    handler = WebhookHandler(
+        settings=_settings(
+            mode="group",
+            telegram_enabled=True,
+            telegram_disable_auth=False,
+            telegram_secret="s3cr3t",
+        ),
+        signal_client=cast(Any, _FakeSignalClient()),
+        telegram_client=cast(Any, _FakeTelegramClient()),
+        openrouter_client=cast(Any, _FakeOpenRouterClient()),
+        chat_context=cast(Any, _FakeChatContextStore()),
+        openrouter_image_client=None,
+        dedupe=DedupeCache(ttl_seconds=60),
+    )
+
+    response = await handler.handle_webhook(
+        payload,
+        BackgroundTasks(),
+        transport_hint="telegram",
+        telegram_secret="s3cr3t",
+    )
+
+    assert response == {"status": "ignored", "reason": "non_mention"}
+
+
+@pytest.mark.anyio
+async def test_handle_webhook_telegram_group_mention_triggers_chat() -> None:
+    payload = {
+        "update_id": 1,
+        "message": {
+            "message_id": 12,
+            "date": 1730000000,
+            "text": "@sigbot summarize this",
+            "entities": [{"type": "mention", "offset": 0, "length": 7}],
+            "from": {"id": 12345, "is_bot": False},
+            "chat": {"id": -10099, "type": "supergroup"},
+        },
+    }
+    fake_telegram = _FakeTelegramClient()
+    handler = WebhookHandler(
+        settings=_settings(
+            mode="group",
+            telegram_enabled=True,
+            telegram_disable_auth=False,
+            telegram_secret="s3cr3t",
+        ),
+        signal_client=cast(Any, _FakeSignalClient()),
+        telegram_client=cast(Any, fake_telegram),
+        openrouter_client=cast(Any, _FakeOpenRouterClient()),
+        chat_context=cast(Any, _FakeChatContextStore()),
+        openrouter_image_client=None,
+        dedupe=DedupeCache(ttl_seconds=60),
+    )
+
+    background_tasks = BackgroundTasks()
+    response = await handler.handle_webhook(
+        payload,
+        background_tasks,
+        transport_hint="telegram",
+        telegram_secret="s3cr3t",
+    )
+    await _run_background_tasks(background_tasks)
+
+    assert response == {"status": "accepted", "reason": "chat_queued"}
+    assert fake_telegram.text_messages == ["chat-response"]
+
+
+@pytest.mark.anyio
+async def test_handle_webhook_telegram_secret_mismatch_is_ignored() -> None:
+    payload = {
+        "update_id": 1,
+        "message": {
+            "message_id": 12,
+            "date": 1730000000,
+            "text": "/search test",
+            "from": {"id": 12345, "is_bot": False},
+            "chat": {"id": 12345, "type": "private"},
+        },
+    }
+    handler = WebhookHandler(
+        settings=_settings(
+            mode="group",
+            telegram_enabled=True,
+            telegram_disable_auth=False,
+            telegram_secret="s3cr3t",
+        ),
+        signal_client=cast(Any, _FakeSignalClient()),
+        telegram_client=cast(Any, _FakeTelegramClient()),
+        openrouter_client=cast(Any, _FakeOpenRouterClient()),
+        chat_context=cast(Any, _FakeChatContextStore()),
+        openrouter_image_client=None,
+        dedupe=DedupeCache(ttl_seconds=60),
+    )
+
+    response = await handler.handle_webhook(
+        payload,
+        BackgroundTasks(),
+        transport_hint="telegram",
+        telegram_secret="wrong",
+    )
+
+    assert response == {"status": "ignored", "reason": "invalid_telegram_secret"}
 
 
 @pytest.mark.anyio
