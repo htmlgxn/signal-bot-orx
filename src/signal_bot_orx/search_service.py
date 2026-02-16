@@ -736,7 +736,7 @@ class SearchService:
                 continue
             try:
                 response = await self._http_client.get(image_url, timeout=timeout)
-            except httpx.TimeoutException, httpx.NetworkError:
+            except (httpx.TimeoutException, httpx.NetworkError):
                 continue
 
             if response.status_code >= 400 or not response.content:
@@ -800,7 +800,7 @@ class SearchService:
         timeout = max(1.0, float(self._settings.bot_search_timeout_seconds))
         try:
             response = await self._http_client.get(thumbnail_url, timeout=timeout)
-        except httpx.TimeoutException, httpx.NetworkError:
+        except (httpx.TimeoutException, httpx.NetworkError):
             return None, None, selected.url, selected.title
 
         if response.status_code >= 400 or not response.content:
