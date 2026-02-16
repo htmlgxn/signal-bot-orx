@@ -45,10 +45,6 @@ dev = [
     "ty>=0.0.16",
 ]
 
-[build-system]
-requires = ["uv_build>=0.10.0,<0.11.0"]
-build-backend = "uv_build"
-
 [tool.ruff]
 line-length = 88
 target-version = "py314"
