@@ -8,12 +8,13 @@ from typing import Protocol
 import httpx
 
 from signal_bot_orx.group_resolver import GroupResolver, ResolvedGroupRecipients
+from signal_bot_orx.messaging import MessageSendError
 from signal_bot_orx.types import Target
 
 logger = logging.getLogger(__name__)
 
 
-class SignalSendError(Exception):
+class SignalSendError(MessageSendError):
     def __init__(
         self,
         message: str,
