@@ -109,19 +109,16 @@ class WebhookHandler:
             )
             return {"status": "ignored", "reason": "unsupported_event"}
 
-        if (
-            parsed.transport == "whatsapp"
-            and (not self._settings.whatsapp_enabled or self._whatsapp_client is None)
+        if parsed.transport == "whatsapp" and (
+            not self._settings.whatsapp_enabled or self._whatsapp_client is None
         ):
             return {"status": "ignored", "reason": "whatsapp_disabled"}
-        if (
-            parsed.transport == "signal"
-            and (not self._settings.signal_enabled or self._signal_client is None)
+        if parsed.transport == "signal" and (
+            not self._settings.signal_enabled or self._signal_client is None
         ):
             return {"status": "ignored", "reason": "signal_disabled"}
-        if (
-            parsed.transport == "telegram"
-            and (not self._settings.telegram_enabled or self._telegram_client is None)
+        if parsed.transport == "telegram" and (
+            not self._settings.telegram_enabled or self._telegram_client is None
         ):
             return {"status": "ignored", "reason": "telegram_disabled"}
 
@@ -730,7 +727,7 @@ class WebhookHandler:
                 exc,
             )
             await self._safe_send_text(message, exc.user_message, reply_target)
-        except (SignalSendError, WhatsAppSendError, TelegramSendError):
+        except SignalSendError, WhatsAppSendError, TelegramSendError:
             logger.exception(
                 "signal_send_error sender=%s group_id=%s",
                 message.sender,
@@ -781,7 +778,7 @@ class WebhookHandler:
                 "image_generation_error sender=%s detail=%s", message.sender, exc
             )
             await self._safe_send_text(message, exc.user_message, reply_target)
-        except (SignalSendError, WhatsAppSendError, TelegramSendError):
+        except SignalSendError, WhatsAppSendError, TelegramSendError:
             logger.exception(
                 "signal_send_error sender=%s group_id=%s",
                 message.sender,
@@ -840,7 +837,7 @@ class WebhookHandler:
             )
         except SearchError as exc:
             await self._safe_send_text(message, exc.user_message, reply_target)
-        except (SignalSendError, WhatsAppSendError, TelegramSendError):
+        except SignalSendError, WhatsAppSendError, TelegramSendError:
             logger.exception(
                 "signal_send_error sender=%s group_id=%s",
                 message.sender,
@@ -875,7 +872,7 @@ class WebhookHandler:
             )
         except SearchError as exc:
             await self._safe_send_text(message, exc.user_message, reply_target)
-        except (SignalSendError, WhatsAppSendError, TelegramSendError):
+        except SignalSendError, WhatsAppSendError, TelegramSendError:
             logger.exception(
                 "signal_send_error sender=%s group_id=%s",
                 message.sender,
@@ -912,7 +909,7 @@ class WebhookHandler:
             )
         except SearchError as exc:
             await self._safe_send_text(message, exc.user_message, reply_target)
-        except (SignalSendError, WhatsAppSendError, TelegramSendError):
+        except SignalSendError, WhatsAppSendError, TelegramSendError:
             logger.exception(
                 "signal_send_error sender=%s group_id=%s",
                 message.sender,
@@ -972,7 +969,7 @@ class WebhookHandler:
             )
         except SearchError as exc:
             await self._safe_send_text(message, exc.user_message, reply_target)
-        except (SignalSendError, WhatsAppSendError, TelegramSendError):
+        except SignalSendError, WhatsAppSendError, TelegramSendError:
             logger.exception(
                 "signal_send_error sender=%s group_id=%s",
                 message.sender,
@@ -1007,7 +1004,7 @@ class WebhookHandler:
                 target=reply_target,
                 message=response_text,
             )
-        except (SignalSendError, WhatsAppSendError, TelegramSendError):
+        except SignalSendError, WhatsAppSendError, TelegramSendError:
             logger.exception(
                 "signal_send_error sender=%s group_id=%s",
                 message.sender,
@@ -1083,7 +1080,10 @@ class WebhookHandler:
         if self._signal_client is None:
             raise SignalSendError("Signal is not configured.")
         await self._signal_client.send_image(
-            target=target, image_bytes=image_bytes, content_type=content_type, caption=caption
+            target=target,
+            image_bytes=image_bytes,
+            content_type=content_type,
+            caption=caption,
         )
 
     async def _safe_send_text(
@@ -1098,7 +1098,7 @@ class WebhookHandler:
                 target=reply_target,
                 message=text,
             )
-        except (SignalSendError, WhatsAppSendError, TelegramSendError):
+        except SignalSendError, WhatsAppSendError, TelegramSendError:
             logger.exception(
                 "signal_send_text_failed sender=%s group_id=%s",
                 message.sender,

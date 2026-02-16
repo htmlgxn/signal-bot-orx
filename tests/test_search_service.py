@@ -1026,7 +1026,9 @@ async def test_resolve_video_selection_rejects_out_of_range() -> None:
 
 
 @pytest.mark.anyio
-async def test_resolve_video_selection_returns_text_fallback_when_no_thumbnail() -> None:
+async def test_resolve_video_selection_returns_text_fallback_when_no_thumbnail() -> (
+    None
+):
     results = [
         SearchResult(
             mode="videos",

@@ -479,7 +479,7 @@ wheels = [
 
 [[package]]
 name = "signal-bot-orx"
-version = "2026.2.14"
+version = "2026.2.15"
 source = { editable = "." }
 dependencies = [
     { name = "ddgs" },

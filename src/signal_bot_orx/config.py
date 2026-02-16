@@ -146,7 +146,11 @@ class Settings:
                 missing.append("SIGNAL_API_BASE_URL")
             if not signal_sender_number:
                 missing.append("SIGNAL_SENDER_NUMBER")
-            if not signal_disable_auth and not allowed_numbers and not allowed_group_ids:
+            if (
+                not signal_disable_auth
+                and not allowed_numbers
+                and not allowed_group_ids
+            ):
                 raise RuntimeError(
                     "Missing Signal allowlist configuration: set SIGNAL_ALLOWED_NUMBER, "
                     "SIGNAL_ALLOWED_NUMBERS, or SIGNAL_ALLOWED_GROUP_IDS, or set "
@@ -155,18 +159,28 @@ class Settings:
 
         whatsapp_allowed_numbers = _split_csv_set(os.getenv("WHATSAPP_ALLOWED_NUMBERS"))
         whatsapp_disable_auth = _parse_bool(os.getenv("WHATSAPP_DISABLE_AUTH"))
-        if whatsapp_enabled and not whatsapp_disable_auth and not whatsapp_allowed_numbers:
+        if (
+            whatsapp_enabled
+            and not whatsapp_disable_auth
+            and not whatsapp_allowed_numbers
+        ):
             raise RuntimeError(
                 "Missing WhatsApp allowlist configuration: set "
                 "WHATSAPP_ALLOWED_NUMBERS or WHATSAPP_DISABLE_AUTH=true"
             )
 
-        telegram_bot_token = _parse_optional_non_empty_str(os.getenv("TELEGRAM_BOT_TOKEN"))
+        telegram_bot_token = _parse_optional_non_empty_str(
+            os.getenv("TELEGRAM_BOT_TOKEN")
+        )
         telegram_webhook_secret = _parse_optional_non_empty_str(
             os.getenv("TELEGRAM_WEBHOOK_SECRET")
         )
-        telegram_allowed_user_ids = _split_csv_set(os.getenv("TELEGRAM_ALLOWED_USER_IDS"))
-        telegram_allowed_chat_ids = _split_csv_set(os.getenv("TELEGRAM_ALLOWED_CHAT_IDS"))
+        telegram_allowed_user_ids = _split_csv_set(
+            os.getenv("TELEGRAM_ALLOWED_USER_IDS")
+        )
+        telegram_allowed_chat_ids = _split_csv_set(
+            os.getenv("TELEGRAM_ALLOWED_CHAT_IDS")
+        )
         telegram_disable_auth = _parse_bool(os.getenv("TELEGRAM_DISABLE_AUTH"))
         if telegram_enabled:
             if not telegram_bot_token:

@@ -1268,7 +1268,9 @@ async def test_handle_webhook_numeric_video_selection_sends_image_and_url() -> N
     assert fake_search.video_selection_calls == [1]
     assert len(fake_signal.image_targets) == 1
     assert fake_signal.image_captions[-1] is not None
-    assert "https://youtube.com/watch?v=abc123" in (fake_signal.image_captions[-1] or "")
+    assert "https://youtube.com/watch?v=abc123" in (
+        fake_signal.image_captions[-1] or ""
+    )
     assert not any(
         "https://youtube.com/watch?v=abc123" in msg for msg in fake_signal.text_messages
     )

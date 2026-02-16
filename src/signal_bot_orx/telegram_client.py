@@ -69,7 +69,9 @@ class TelegramClient:
         try:
             response = await self._http_client.post(url, json=payload, timeout=30)
         except (httpx.TimeoutException, httpx.NetworkError) as exc:
-            raise TelegramSendError("Telegram send failed due to network error.") from exc
+            raise TelegramSendError(
+                "Telegram send failed due to network error."
+            ) from exc
 
         _raise_for_telegram_error(response)
 
@@ -89,7 +91,9 @@ class TelegramClient:
                 timeout=30,
             )
         except (httpx.TimeoutException, httpx.NetworkError) as exc:
-            raise TelegramSendError("Telegram send failed due to network error.") from exc
+            raise TelegramSendError(
+                "Telegram send failed due to network error."
+            ) from exc
 
         _raise_for_telegram_error(response)
 
