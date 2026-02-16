@@ -41,6 +41,19 @@ class Settings:
     signal_allowed_group_ids: frozenset[str]
     openrouter_chat_api_key: str
     openrouter_model: str
+    signal_enabled: bool = True
+    telegram_enabled: bool = False
+    telegram_bot_token: str | None = None
+    telegram_webhook_secret: str | None = None
+    telegram_allowed_user_ids: frozenset[str] = frozenset()
+    telegram_allowed_chat_ids: frozenset[str] = frozenset()
+    telegram_disable_auth: bool = False
+    telegram_bot_username: str | None = None
+    whatsapp_enabled: bool = False
+    whatsapp_bridge_base_url: str | None = None
+    whatsapp_bridge_token: str | None = None
+    whatsapp_allowed_numbers: frozenset[str] = frozenset()
+    whatsapp_disable_auth: bool = False
     openrouter_image_api_key: str | None = None
     openrouter_image_model: str | None = None
     openrouter_image_timeout_seconds: float = 90.0
@@ -97,20 +110,23 @@ class Settings:
     @classmethod
     def from_env(cls) -> Settings:
         missing: list[str] = []
+        signal_enabled = (
+            _parse_bool(os.getenv("SIGNAL_ENABLED"))
+            if os.getenv("SIGNAL_ENABLED") is not None
+            else True
+        )
+        whatsapp_enabled = _parse_bool(os.getenv("WHATSAPP_ENABLED"))
+        telegram_enabled = _parse_bool(os.getenv("TELEGRAM_ENABLED"))
 
-        required = {
-            "signal_api_base_url": os.getenv("SIGNAL_API_BASE_URL"),
-            "signal_sender_number": os.getenv("SIGNAL_SENDER_NUMBER"),
-            "openrouter_chat_api_key": os.getenv("OPENROUTER_CHAT_API_KEY"),
-        }
+        if not signal_enabled and not whatsapp_enabled and not telegram_enabled:
+            raise RuntimeError(
+                "No transports enabled. Enable at least one of SIGNAL_ENABLED, "
+                "WHATSAPP_ENABLED, or TELEGRAM_ENABLED."
+            )
 
-        for key, value in required.items():
-            if not value:
-                missing.append(key.upper())
-
-        if missing:
-            details = ", ".join(sorted(missing))
-            raise RuntimeError(f"Missing required environment variables: {details}")
+        openrouter_chat_api_key = os.getenv("OPENROUTER_CHAT_API_KEY")
+        if not openrouter_chat_api_key:
+            missing.append("OPENROUTER_CHAT_API_KEY")
 
         allowed_numbers = _split_csv_set(os.getenv("SIGNAL_ALLOWED_NUMBERS"))
         legacy_allowed_number = os.getenv("SIGNAL_ALLOWED_NUMBER")
@@ -119,11 +135,56 @@ class Settings:
 
         allowed_group_ids = _split_csv_set(os.getenv("SIGNAL_ALLOWED_GROUP_IDS"))
         signal_disable_auth = _parse_bool(os.getenv("SIGNAL_DISABLE_AUTH"))
-        if not signal_disable_auth and not allowed_numbers and not allowed_group_ids:
+        signal_api_base_url = _parse_optional_non_empty_str(
+            os.getenv("SIGNAL_API_BASE_URL")
+        )
+        signal_sender_number = _parse_optional_non_empty_str(
+            os.getenv("SIGNAL_SENDER_NUMBER")
+        )
+        if signal_enabled:
+            if not signal_api_base_url:
+                missing.append("SIGNAL_API_BASE_URL")
+            if not signal_sender_number:
+                missing.append("SIGNAL_SENDER_NUMBER")
+            if not signal_disable_auth and not allowed_numbers and not allowed_group_ids:
+                raise RuntimeError(
+                    "Missing Signal allowlist configuration: set SIGNAL_ALLOWED_NUMBER, "
+                    "SIGNAL_ALLOWED_NUMBERS, or SIGNAL_ALLOWED_GROUP_IDS, or set "
+                    "SIGNAL_DISABLE_AUTH=true"
+                )
+
+        whatsapp_allowed_numbers = _split_csv_set(os.getenv("WHATSAPP_ALLOWED_NUMBERS"))
+        whatsapp_disable_auth = _parse_bool(os.getenv("WHATSAPP_DISABLE_AUTH"))
+        if whatsapp_enabled and not whatsapp_disable_auth and not whatsapp_allowed_numbers:
             raise RuntimeError(
-                "Missing allowlist configuration: set SIGNAL_ALLOWED_NUMBER, "
-                "SIGNAL_ALLOWED_NUMBERS, or SIGNAL_ALLOWED_GROUP_IDS"
+                "Missing WhatsApp allowlist configuration: set "
+                "WHATSAPP_ALLOWED_NUMBERS or WHATSAPP_DISABLE_AUTH=true"
             )
+
+        telegram_bot_token = _parse_optional_non_empty_str(os.getenv("TELEGRAM_BOT_TOKEN"))
+        telegram_webhook_secret = _parse_optional_non_empty_str(
+            os.getenv("TELEGRAM_WEBHOOK_SECRET")
+        )
+        telegram_allowed_user_ids = _split_csv_set(os.getenv("TELEGRAM_ALLOWED_USER_IDS"))
+        telegram_allowed_chat_ids = _split_csv_set(os.getenv("TELEGRAM_ALLOWED_CHAT_IDS"))
+        telegram_disable_auth = _parse_bool(os.getenv("TELEGRAM_DISABLE_AUTH"))
+        if telegram_enabled:
+            if not telegram_bot_token:
+                missing.append("TELEGRAM_BOT_TOKEN")
+            if (
+                not telegram_disable_auth
+                and not telegram_allowed_user_ids
+                and not telegram_allowed_chat_ids
+            ):
+                raise RuntimeError(
+                    "Missing Telegram allowlist configuration: set "
+                    "TELEGRAM_ALLOWED_USER_IDS, TELEGRAM_ALLOWED_CHAT_IDS, or "
+                    "TELEGRAM_DISABLE_AUTH=true"
+                )
+
+        if missing:
+            details = ", ".join(sorted(set(missing)))
+            raise RuntimeError(f"Missing required environment variables: {details}")
 
         mention_aliases = _split_csv_ordered(os.getenv("BOT_MENTION_ALIASES"))
         if not mention_aliases:
@@ -151,14 +212,33 @@ class Settings:
         )
 
         return cls(
-            signal_api_base_url=required["signal_api_base_url"] or "",
-            signal_sender_number=required["signal_sender_number"] or "",
+            signal_api_base_url=signal_api_base_url or "",
+            signal_sender_number=signal_sender_number or "",
             signal_sender_uuid=os.getenv("SIGNAL_SENDER_UUID"),
             signal_allowed_numbers=frozenset(allowed_numbers),
             signal_allowed_group_ids=frozenset(allowed_group_ids),
-            signal_disable_auth=signal_disable_auth,
-            openrouter_chat_api_key=required["openrouter_chat_api_key"] or "",
+            openrouter_chat_api_key=openrouter_chat_api_key or "",
             openrouter_model=os.getenv("OPENROUTER_MODEL", DEFAULT_OPENROUTER_MODEL),
+            signal_enabled=signal_enabled,
+            signal_disable_auth=signal_disable_auth,
+            telegram_enabled=telegram_enabled,
+            telegram_bot_token=telegram_bot_token,
+            telegram_webhook_secret=telegram_webhook_secret,
+            telegram_allowed_user_ids=frozenset(telegram_allowed_user_ids),
+            telegram_allowed_chat_ids=frozenset(telegram_allowed_chat_ids),
+            telegram_disable_auth=telegram_disable_auth,
+            telegram_bot_username=_parse_optional_non_empty_str(
+                os.getenv("TELEGRAM_BOT_USERNAME")
+            ),
+            whatsapp_enabled=whatsapp_enabled,
+            whatsapp_bridge_base_url=_parse_optional_non_empty_str(
+                os.getenv("WHATSAPP_BRIDGE_BASE_URL")
+            ),
+            whatsapp_bridge_token=_parse_optional_non_empty_str(
+                os.getenv("WHATSAPP_BRIDGE_TOKEN")
+            ),
+            whatsapp_allowed_numbers=frozenset(whatsapp_allowed_numbers),
+            whatsapp_disable_auth=whatsapp_disable_auth,
             openrouter_image_api_key=os.getenv("OPENROUTER_IMAGE_API_KEY"),
             openrouter_image_model=os.getenv("OPENROUTER_IMAGE_MODEL"),
             openrouter_image_timeout_seconds=float(
@@ -393,6 +473,15 @@ def _parse_non_empty_str(value: str | None, *, default: str) -> str:
     stripped = value.strip().lower()
     if not stripped:
         return default
+    return stripped
+
+
+def _parse_optional_non_empty_str(value: str | None) -> str | None:
+    if value is None:
+        return None
+    stripped = value.strip()
+    if not stripped:
+        return None
     return stripped
 
 

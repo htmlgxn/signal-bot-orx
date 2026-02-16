@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# WhatsApp session/auth state
+.wwebjs_auth/
+.wwebjs_cache/
+
+# Local env/secrets
+.env
+.env.*
+!.env.example
+
+# Logs/runtime noise
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS/editor
+.DS_Store
+Thumbs.db
