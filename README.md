@@ -22,12 +22,14 @@ Primary behavior:
 - Maintains and supports customizable in-memory conversation history per group.
 - Deduplicates repeated webhook deliveries.
 - Supports image generation  via OpenRouter when configured.
+- Provides current weather and 5-day forecasts via OpenWeatherMap.
 
 ## Requirements
 
 - [`uv`](https://docs.astral.sh/uv/)
 - Running [`signal-cli-rest-api`](https://github.com/bbernhard/signal-cli-rest-api/)
 - OpenRouter API key for chat
+- OpenWeatherMap API key (optional) for weather commands
 
 ## Installation
 
@@ -155,6 +157,11 @@ Image mode (`/imagine`) options:
 - `OPENROUTER_IMAGE_MODEL`
 - `OPENROUTER_IMAGE_TIMEOUT_SECONDS` (default: `90`)
 
+Weather options (OpenWeatherMap):
+- `WEATHER_API_KEY` (required for weather commands)
+- `WEATHER_UNITS` (`metric|imperial`, default: `metric`)
+- `WEATHER_DEFAULT_LOCATION` (optional default for empty location args)
+
 Webhook/runtime options:
 - `BOT_GROUP_REPLY_MODE` (`group` or `dm_fallback`, default: `group`)
 - `BOT_WEBHOOK_HOST` (default: `127.0.0.1`)
@@ -246,6 +253,13 @@ Optional image mode:
 
 ```text
 /imagine a watercolor fox reading a map
+```
+
+Weather commands:
+
+```text
+/weather London
+/forecast Tokyo
 ```
 
 ## Development

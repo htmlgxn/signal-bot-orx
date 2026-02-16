@@ -103,6 +103,9 @@ class Settings:
     bot_search_videos_max_results: int = 5
     bot_search_timeout_seconds: float = 8.0
     bot_search_source_ttl_seconds: int = 1800
+    weather_api_key: str | None = None
+    weather_units: Literal["metric", "imperial"] = "metric"
+    weather_default_location: str | None = None
     bot_group_reply_mode: GroupReplyMode = "group"
     bot_webhook_host: str = "127.0.0.1"
     bot_webhook_port: int = 8001
@@ -381,6 +384,15 @@ class Settings:
             ),
             bot_search_source_ttl_seconds=int(
                 os.getenv("BOT_SEARCH_SOURCE_TTL_SECONDS", "1800")
+            ),
+            weather_api_key=_parse_optional_non_empty_str(os.getenv("WEATHER_API_KEY")),
+            weather_units=(
+                "imperial"
+                if (os.getenv("WEATHER_UNITS") or "").strip().lower() == "imperial"
+                else "metric"
+            ),
+            weather_default_location=_parse_optional_non_empty_str(
+                os.getenv("WEATHER_DEFAULT_LOCATION")
             ),
             bot_group_reply_mode=_parse_group_reply_mode(
                 os.getenv("BOT_GROUP_REPLY_MODE")

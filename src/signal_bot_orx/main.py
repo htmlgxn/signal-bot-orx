@@ -16,6 +16,7 @@ from signal_bot_orx.search_context import SearchContextStore
 from signal_bot_orx.search_service import SearchService
 from signal_bot_orx.signal_client import SignalClient
 from signal_bot_orx.telegram_client import TelegramClient
+from signal_bot_orx.weather_client import OpenWeatherClient
 from signal_bot_orx.webhook import WebhookHandler, build_router
 from signal_bot_orx.whatsapp_client import WhatsAppClient
 
@@ -73,6 +74,15 @@ def create_app(settings: Settings) -> FastAPI:
             app_title=settings.openrouter_app_title,
         )
 
+    # OpenWeatherMap client for weather commands
+    weather_client: OpenWeatherClient | None = None
+    if settings.weather_api_key:
+        weather_client = OpenWeatherClient(
+            api_key=settings.weather_api_key,
+            http_client=http_client,
+            units=settings.weather_units,
+        )
+
     chat_context = ChatContextStore(
         max_turns=settings.bot_chat_context_turns,
         ttl_seconds=settings.bot_chat_context_ttl_seconds,
@@ -98,6 +108,7 @@ def create_app(settings: Settings) -> FastAPI:
         chat_context=chat_context,
         search_service=search_service,
         dedupe=dedupe,
+        weather_client=weather_client,
     )
 
     app.include_router(build_router(handler))

@@ -652,3 +652,16 @@ def test_settings_search_backend_news_legacy_rejects_encyclopedia_backends(
         Settings.from_env()
 
     assert "Invalid BOT_SEARCH_BACKEND_NEWS" in str(exc.value)
+
+
+def test_settings_loads_weather_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    _set_base_required(monkeypatch)
+    monkeypatch.setenv("WEATHER_API_KEY", "weather-key")
+    monkeypatch.setenv("WEATHER_UNITS", "imperial")
+    monkeypatch.setenv("WEATHER_DEFAULT_LOCATION", "London")
+
+    settings = Settings.from_env()
+
+    assert settings.weather_api_key == "weather-key"
+    assert settings.weather_units == "imperial"
+    assert settings.weather_default_location == "London"

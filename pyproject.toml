@@ -15,7 +15,7 @@ classifiers = [
     "Environment :: Console",
     "Framework :: FastAPI",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.14",
@@ -40,6 +40,7 @@ Issues = "https://github.com/htmlgxn/signal-bot-orx/issues"
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",
+    "pytest-asyncio>=0.23.0",
     "ruff>=0.15.0",
     "tomli-w>=1.2.0",
     "ty>=0.0.16",

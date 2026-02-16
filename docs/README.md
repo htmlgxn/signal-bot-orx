@@ -7,6 +7,7 @@ This guide is for running `signal-bot-orx` as a webhook service.
 - `signal-cli-rest-api` is running and registered with your bot number.
 - `uv` is installed.
 - You have an OpenRouter API key for chat.
+- (Optional) You have an OpenWeatherMap API key.
 
 ## 2. Clone and install
 
@@ -42,7 +43,16 @@ Optional image mode:
 
 ```bash
 OPENROUTER_IMAGE_API_KEY=sk-or-...
+OPENROUTER_IMAGE_API_KEY=sk-or-...
 OPENROUTER_IMAGE_MODEL=openai/gpt-image-1
+```
+
+Optional weather:
+
+```bash
+WEATHER_API_KEY=your-owm-key
+WEATHER_UNITS=metric
+WEATHER_DEFAULT_LOCATION=London
 ```
 
 Optional search tuning:
@@ -194,6 +204,13 @@ Optional image generation:
 
 ```text
 /imagine a neon skyline over snowy mountains
+```
+
+Weather commands:
+
+```text
+/weather New York
+/forecast Paris
 ```
 
 ## 7. Troubleshooting

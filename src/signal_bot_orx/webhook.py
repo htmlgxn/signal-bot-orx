@@ -32,6 +32,11 @@ from signal_bot_orx.types import (
     parse_incoming_webhook,
     strip_mention_spans,
 )
+from signal_bot_orx.weather_client import (
+    OpenWeatherClient,
+    _format_current,
+    _format_forecast,
+)
 from signal_bot_orx.whatsapp_client import WhatsAppClient, WhatsAppSendError
 
 logger = logging.getLogger(__name__)
@@ -59,6 +64,7 @@ class WebhookHandler:
         openrouter_image_client: OpenRouterImageClient | None,
         chat_context: ChatContextStore,
         dedupe: DedupeCache,
+        weather_client: OpenWeatherClient | None = None,
         search_service: SearchService | None = None,
     ) -> None:
         self._settings = settings
@@ -70,6 +76,30 @@ class WebhookHandler:
         self._chat_context = chat_context
         self._search_service = search_service
         self._dedupe = dedupe
+
+        self._weather_client = weather_client
+
+    async def _process_weather_current(
+        self, parsed: IncomingMessage, location: str
+    ) -> None:
+        try:
+            data = await self._weather_client.current(location)  # type: ignore[union-attr]
+            reply = _format_current(data, self._settings.weather_units)
+        except Exception as exc:
+            reply = f"Unable to retrieve weather: {exc}"
+        reply_target = resolve_reply_target(parsed, self._settings)
+        await self._safe_send_text(parsed, reply, reply_target)
+
+    async def _process_weather_forecast(
+        self, parsed: IncomingMessage, location: str
+    ) -> None:
+        try:
+            data = await self._weather_client.forecast(location)  # type: ignore[union-attr]
+            reply = _format_forecast(data, self._settings.weather_units)
+        except Exception as exc:
+            reply = f"Unable to retrieve forecast: {exc}"
+        reply_target = resolve_reply_target(parsed, self._settings)
+        await self._safe_send_text(parsed, reply, reply_target)
 
     async def handle_webhook(
         self,
@@ -254,6 +284,64 @@ class WebhookHandler:
                 reason="non_mention",
             )
             return {"status": "ignored", "reason": "non_mention"}
+
+        # Weather command handling
+        if command_text == "/weather" or command_text.startswith("/weather "):
+            location = (
+                command_text[len("/weather ") :].strip()
+                if command_text.startswith("/weather ")
+                else ""
+            )
+            if not location and self._settings.weather_default_location:
+                location = self._settings.weather_default_location
+            if not location:
+                reply_target = resolve_reply_target(parsed, self._settings)
+                background_tasks.add_task(
+                    self._safe_send_text,
+                    parsed,
+                    "Usage: /weather <location>",
+                    reply_target,
+                )
+                return {"status": "accepted", "reason": "weather_usage_sent"}
+            if not self._weather_client:
+                reply_target = resolve_reply_target(parsed, self._settings)
+                background_tasks.add_task(
+                    self._safe_send_text,
+                    parsed,
+                    "Weather is not configured on this bot.",
+                    reply_target,
+                )
+                return {"status": "accepted", "reason": "weather_disabled"}
+            background_tasks.add_task(self._process_weather_current, parsed, location)
+            return {"status": "accepted", "reason": "weather_queued"}
+        if command_text == "/forecast" or command_text.startswith("/forecast "):
+            location = (
+                command_text[len("/forecast ") :].strip()
+                if command_text.startswith("/forecast ")
+                else ""
+            )
+            if not location and self._settings.weather_default_location:
+                location = self._settings.weather_default_location
+            if not location:
+                reply_target = resolve_reply_target(parsed, self._settings)
+                background_tasks.add_task(
+                    self._safe_send_text,
+                    parsed,
+                    "Usage: /forecast <location>",
+                    reply_target,
+                )
+                return {"status": "accepted", "reason": "forecast_usage_sent"}
+            if not self._weather_client:
+                reply_target = resolve_reply_target(parsed, self._settings)
+                background_tasks.add_task(
+                    self._safe_send_text,
+                    parsed,
+                    "Weather is not configured on this bot.",
+                    reply_target,
+                )
+                return {"status": "accepted", "reason": "weather_disabled"}
+            background_tasks.add_task(self._process_weather_forecast, parsed, location)
+            return {"status": "accepted", "reason": "forecast_queued"}
 
         chat_prompt = normalize_chat_prompt(parsed, self._settings)
         if not chat_prompt:
