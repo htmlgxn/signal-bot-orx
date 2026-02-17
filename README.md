@@ -134,6 +134,9 @@ Search options:
 - `BOT_SEARCH_WIKI_MAX_RESULTS` (default: `3`)
 - `BOT_SEARCH_IMAGES_MAX_RESULTS` (default: `3`, top image sent)
 - `BOT_SEARCH_VIDEOS_MAX_RESULTS` (default: `5`, numbered list size for `/videos`)
+- `BOT_SEARCH_JMAIL_MAX_RESULTS` (default: `10`)
+- `BOT_SEARCH_LOLCOW_CYRAXX_MAX_RESULTS` (default: `3`)
+- `BOT_SEARCH_LOLCOW_LARSON_MAX_RESULTS` (default: `3`)
 - `BOT_SEARCH_TIMEOUT_SECONDS` (default: `8`)
 - `BOT_SEARCH_SOURCE_TTL_SECONDS` (default: `1800`)
 
