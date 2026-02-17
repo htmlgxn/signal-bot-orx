@@ -1,10 +1,10 @@
-from __future__ import annotations
-
-import asyncio
 import logging
 from typing import Literal
 
 import httpx
+from orx_search.providers.weather import WeatherProvider
+
+logger = logging.getLogger(__name__)
 
 logger = logging.getLogger(__name__)
 
@@ -17,59 +17,55 @@ class WeatherError(Exception):
 
 
 class OpenWeatherClient:
-    """Simple client for OpenWeatherMap current weather and 5-day forecast.
-
-    Uses the shared httpx.AsyncClient from the app to avoid extra connections.
-    """
+    """Client for OpenWeatherMap wrapping orx-search WeatherProvider."""
 
     def __init__(
         self,
         *,
         api_key: str,
-        http_client: httpx.AsyncClient,
+        http_client: httpx.AsyncClient | None = None,
         units: Literal["metric", "imperial"] = "metric",
     ) -> None:
-        self._api_key = api_key
-        self._http_client = http_client
-        self._units = units
-        self._base_url = "https://api.openweathermap.org/data/2.5"
+        _ = http_client  # Unused, kept for compatibility
+        self._provider = WeatherProvider(api_key=api_key, units=units)
 
     async def current(self, location: str) -> dict:
-        url = f"{self._base_url}/weather"
-        params = {"q": location, "appid": self._api_key, "units": self._units}
-        return await self._request(url, params)
+        """Get current weather raw data for compatibility with _format_current."""
+        # For compatibility with webhook.py, we still need raw dict if we keep _format_current there.
+        # But WeatherProvider.current_async returns SearchResult.
+        # Let's adjust it to return raw if needed, or just re-request or use private method.
+        # Actually, WeatherProvider already has _get_current (sync) and current_async.
+        # I'll make _get_current_data_async available in WeatherProvider.
+
+        url = "https://api.openweathermap.org/data/2.5/weather"
+        params = {
+            "q": location,
+            "appid": self._provider._api_key,
+            "units": self._provider._units,
+        }
+        client = self._provider._get_async_client()
+        resp = await client.get(url, params=params)
+        if resp.status_code >= 400:
+            raise WeatherError(
+                f"Weather request failed: {resp.text}", status_code=resp.status_code
+            )
+        return resp.json()
 
     async def forecast(self, location: str) -> dict:
-        url = f"{self._base_url}/forecast"
-        params = {"q": location, "appid": self._api_key, "units": self._units}
-        return await self._request(url, params)
-
-    async def _request(self, url: str, params: dict) -> dict:
-        for attempt in range(3):
-            try:
-                response = await self._http_client.get(url, params=params, timeout=10.0)
-            except (httpx.TimeoutException, httpx.NetworkError) as exc:
-                if attempt == 2:
-                    raise WeatherError("Weather service timed out. Try again.") from exc
-                await asyncio.sleep(0.5 * (attempt + 1))
-                continue
-            if response.status_code < 400:
-                try:
-                    return response.json()
-                except ValueError as exc:
-                    raise WeatherError(
-                        "Weather service returned invalid JSON.",
-                        status_code=response.status_code,
-                    ) from exc
-            if response.status_code in {429, 500, 502, 503, 504} and attempt < 2:
-                await asyncio.sleep(0.5 * (attempt + 1))
-                continue
-            # Authorization or other client errors
+        """Get forecast raw data for compatibility with _format_forecast."""
+        url = "https://api.openweathermap.org/data/2.5/forecast"
+        params = {
+            "q": location,
+            "appid": self._provider._api_key,
+            "units": self._provider._units,
+        }
+        client = self._provider._get_async_client()
+        resp = await client.get(url, params=params)
+        if resp.status_code >= 400:
             raise WeatherError(
-                f"Weather request failed: {response.text}",
-                status_code=response.status_code,
+                f"Weather request failed: {resp.text}", status_code=resp.status_code
             )
-        raise WeatherError("Weather request failed unexpectedly.")
+        return resp.json()
 
 
 def _format_current(data: dict, units: str) -> str:

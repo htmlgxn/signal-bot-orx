@@ -49,6 +49,9 @@ SEARCH_COMMANDS: dict[str, SearchMode] = {
     "/wiki": "wiki",
     "/images": "images",
     "/videos": "videos",
+    "/jmail": "jmail",
+    "/lc_cyraxx": "lolcow_cyraxx",
+    "/lc_larson": "lolcow_larson",
 }
 
 
@@ -245,18 +248,40 @@ class WebhookHandler:
             )
             return self.handle_imagine_command(parsed, imagine_prompt, background_tasks)
 
-        video_selection_number = parse_video_selection_number(parsed.text) or (
-            parse_video_selection_number(command_text)
+        selection_number = parse_numeric_selection(parsed.text) or (
+            parse_numeric_selection(command_text)
             if command_text != parsed.text
             else None
         )
         if (
-            video_selection_number is not None
+            selection_number is not None
             and self._search_service is not None
             and self._settings.bot_search_enabled
         ):
+            conversation_key = conversation_key_for_message(parsed)
+            # Check JMail selection first
+            pending_jmail = self._search_service.get_pending_jmail_selection_state(
+                conversation_key=conversation_key,
+            )
+            if pending_jmail is not None:
+                self._log_search_route(
+                    message_scope=message_scope,
+                    mention_eligible=mention_eligible,
+                    slash_command=None,
+                    auto_decision=None,
+                    final_path="search_jmail_selection",
+                    reason="jmail_selection",
+                )
+                background_tasks.add_task(
+                    self._process_search_jmail_selection,
+                    parsed,
+                    selection_number,
+                )
+                return {"status": "accepted", "reason": "search_jmail_selection_queued"}
+
+            # Then check Video selection
             pending_video = self._search_service.get_pending_video_selection_state(
-                conversation_key=conversation_key_for_message(parsed),
+                conversation_key=conversation_key,
             )
             if pending_video is not None:
                 self._log_search_route(
@@ -270,7 +295,7 @@ class WebhookHandler:
                 background_tasks.add_task(
                     self._process_search_video_selection,
                     parsed,
-                    video_selection_number,
+                    selection_number,
                 )
                 return {"status": "accepted", "reason": "search_video_selection_queued"}
 
@@ -597,6 +622,12 @@ class WebhookHandler:
                 self._search_service.clear_pending_followup_state(
                     conversation_key=conversation_key,
                 )
+                self._search_service.clear_pending_video_selection_state(
+                    conversation_key=conversation_key,
+                )
+                self._search_service.clear_pending_jmail_selection_state(
+                    conversation_key=conversation_key,
+                )
                 if decision.mode == "images":
                     self._log_search_route(
                         message_scope=message_scope,
@@ -708,6 +739,10 @@ class WebhookHandler:
             background_tasks.add_task(self._process_search_videos_list, message, query)
             return {"status": "accepted", "reason": "search_videos_queued"}
 
+        if mode == "jmail":
+            background_tasks.add_task(self._process_search_jmail_list, message, query)
+            return {"status": "accepted", "reason": "search_jmail_queued"}
+
         background_tasks.add_task(self._process_search_summary, message, mode, query)
         return {"status": "accepted", "reason": "search_queued"}
 
@@ -815,7 +850,7 @@ class WebhookHandler:
                 exc,
             )
             await self._safe_send_text(message, exc.user_message, reply_target)
-        except (SignalSendError, WhatsAppSendError, TelegramSendError):
+        except SignalSendError, WhatsAppSendError, TelegramSendError:
             logger.exception(
                 "signal_send_error sender=%s group_id=%s",
                 message.sender,
@@ -866,7 +901,7 @@ class WebhookHandler:
                 "image_generation_error sender=%s detail=%s", message.sender, exc
             )
             await self._safe_send_text(message, exc.user_message, reply_target)
-        except (SignalSendError, WhatsAppSendError, TelegramSendError):
+        except SignalSendError, WhatsAppSendError, TelegramSendError:
             logger.exception(
                 "signal_send_error sender=%s group_id=%s",
                 message.sender,
@@ -925,7 +960,7 @@ class WebhookHandler:
             )
         except SearchError as exc:
             await self._safe_send_text(message, exc.user_message, reply_target)
-        except (SignalSendError, WhatsAppSendError, TelegramSendError):
+        except SignalSendError, WhatsAppSendError, TelegramSendError:
             logger.exception(
                 "signal_send_error sender=%s group_id=%s",
                 message.sender,
@@ -960,7 +995,7 @@ class WebhookHandler:
             )
         except SearchError as exc:
             await self._safe_send_text(message, exc.user_message, reply_target)
-        except (SignalSendError, WhatsAppSendError, TelegramSendError):
+        except SignalSendError, WhatsAppSendError, TelegramSendError:
             logger.exception(
                 "signal_send_error sender=%s group_id=%s",
                 message.sender,
@@ -997,7 +1032,7 @@ class WebhookHandler:
             )
         except SearchError as exc:
             await self._safe_send_text(message, exc.user_message, reply_target)
-        except (SignalSendError, WhatsAppSendError, TelegramSendError):
+        except SignalSendError, WhatsAppSendError, TelegramSendError:
             logger.exception(
                 "signal_send_error sender=%s group_id=%s",
                 message.sender,
@@ -1009,6 +1044,36 @@ class WebhookHandler:
                 message,
                 "Unexpected error while searching videos.",
                 reply_target,
+            )
+
+    async def _process_search_jmail_list(
+        self,
+        message: IncomingMessage,
+        query: str,
+    ) -> None:
+        if self._search_service is None:
+            return
+
+        reply_target = resolve_reply_target(message, self._settings)
+        conversation_key = conversation_key_for_message(message)
+
+        try:
+            response_text = await self._search_service.jmail_list_reply(
+                conversation_key=conversation_key,
+                query=query,
+            )
+            await self._send_text(
+                transport=message.transport,
+                target=reply_target,
+                message=_truncate_reply(response_text),
+            )
+        except SearchError as exc:
+            await self._safe_send_text(message, exc.user_message, reply_target)
+        except SignalSendError, WhatsAppSendError, TelegramSendError:
+            logger.exception(
+                "signal_send_error sender=%s group_id=%s",
+                message.sender,
+                message.target.group_id,
             )
 
     async def _process_search_video_selection(
@@ -1057,7 +1122,7 @@ class WebhookHandler:
             )
         except SearchError as exc:
             await self._safe_send_text(message, exc.user_message, reply_target)
-        except (SignalSendError, WhatsAppSendError, TelegramSendError):
+        except SignalSendError, WhatsAppSendError, TelegramSendError:
             logger.exception(
                 "signal_send_error sender=%s group_id=%s",
                 message.sender,
@@ -1070,6 +1135,54 @@ class WebhookHandler:
             await self._safe_send_text(
                 message,
                 "Unexpected error while selecting video result.",
+                reply_target,
+            )
+
+    async def _process_search_jmail_selection(
+        self,
+        message: IncomingMessage,
+        selection_number: int,
+    ) -> None:
+        if self._search_service is None:
+            return
+
+        reply_target = resolve_reply_target(message, self._settings)
+        conversation_key = conversation_key_for_message(message)
+
+        try:
+            history_context = build_search_summary_history_context(
+                chat_context=self._chat_context,
+                conversation_key=conversation_key,
+                enabled=self._settings.bot_search_use_history_for_summary,
+            )
+
+            summary = await self._search_service.resolve_jmail_selection(
+                conversation_key=conversation_key,
+                selection_number=selection_number,
+                history_context=history_context,
+            )
+            self._clear_pending_jmail_selection_state(message)
+
+            await self._send_text(
+                transport=message.transport,
+                target=reply_target,
+                message=_truncate_reply(summary),
+            )
+        except SearchError as exc:
+            await self._safe_send_text(message, exc.user_message, reply_target)
+        except SignalSendError, WhatsAppSendError, TelegramSendError:
+            logger.exception(
+                "signal_send_error sender=%s group_id=%s",
+                message.sender,
+                message.target.group_id,
+            )
+        except Exception:
+            logger.exception(
+                "unexpected_search_jmail_selection_error sender=%s", message.sender
+            )
+            await self._safe_send_text(
+                message,
+                "Unexpected error while selecting JMail result.",
                 reply_target,
             )
 
@@ -1092,7 +1205,7 @@ class WebhookHandler:
                 target=reply_target,
                 message=response_text,
             )
-        except (SignalSendError, WhatsAppSendError, TelegramSendError):
+        except SignalSendError, WhatsAppSendError, TelegramSendError:
             logger.exception(
                 "signal_send_error sender=%s group_id=%s",
                 message.sender,
@@ -1186,7 +1299,7 @@ class WebhookHandler:
                 target=reply_target,
                 message=text,
             )
-        except (SignalSendError, WhatsAppSendError, TelegramSendError):
+        except SignalSendError, WhatsAppSendError, TelegramSendError:
             logger.exception(
                 "signal_send_text_failed sender=%s group_id=%s",
                 message.sender,
@@ -1204,6 +1317,13 @@ class WebhookHandler:
         if self._search_service is None:
             return
         self._search_service.clear_pending_video_selection_state(
+            conversation_key=conversation_key_for_message(message),
+        )
+
+    def _clear_pending_jmail_selection_state(self, message: IncomingMessage) -> None:
+        if self._search_service is None:
+            return
+        self._search_service.clear_pending_jmail_selection_state(
             conversation_key=conversation_key_for_message(message),
         )
 
@@ -1466,10 +1586,16 @@ def is_search_mode_enabled(mode: SearchMode, settings: Settings) -> bool:
         return settings.bot_search_mode_images_enabled
     if mode == "videos":
         return settings.bot_search_mode_videos_enabled
+    if mode == "jmail":
+        return settings.bot_search_mode_jmail_enabled
+    if mode == "lolcow_cyraxx":
+        return settings.bot_search_mode_lolcow_cyraxx_enabled
+    if mode == "lolcow_larson":
+        return settings.bot_search_mode_lolcow_larson_enabled
     return False
 
 
-def parse_video_selection_number(text: str) -> int | None:
+def parse_numeric_selection(text: str) -> int | None:
     stripped = text.strip()
     if not re.fullmatch(r"\d+", stripped):
         return None

@@ -39,6 +39,20 @@ class PendingVideoSelectionState:
     created_at: float
 
 
+@dataclass(frozen=True)
+class PendingJmailSelection:
+    title: str
+    url: str
+    snippet: str
+
+
+@dataclass(frozen=True)
+class PendingJmailSelectionState:
+    query: str
+    results: tuple[PendingJmailSelection, ...]
+    created_at: float
+
+
 class SearchContextStore:
     def __init__(
         self, *, ttl_seconds: int, max_records_per_conversation: int = 40
@@ -48,6 +62,7 @@ class SearchContextStore:
         self._records: dict[str, list[SourceRecord]] = {}
         self._pending_followups: dict[str, PendingFollowupState] = {}
         self._pending_video_selections: dict[str, PendingVideoSelectionState] = {}
+        self._pending_jmail_selections: dict[str, PendingJmailSelectionState] = {}
 
     def remember_results(
         self,
@@ -215,6 +230,43 @@ class SearchContextStore:
     def clear_pending_video_selection(self, conversation_key: str) -> None:
         self._pending_video_selections.pop(conversation_key, None)
 
+    def set_pending_jmail_selection(
+        self,
+        conversation_key: str,
+        *,
+        query: str,
+        results: list[SearchResult],
+    ) -> None:
+        now = time.monotonic()
+        self._purge(now)
+        selections: list[PendingJmailSelection] = []
+        for result in results:
+            if not result.url.strip():
+                continue
+            selections.append(
+                PendingJmailSelection(
+                    title=result.title.strip() or "Untitled email",
+                    url=result.url.strip(),
+                    snippet=result.snippet.strip(),
+                )
+            )
+        self._pending_jmail_selections[conversation_key] = PendingJmailSelectionState(
+            query=query,
+            results=tuple(selections),
+            created_at=now,
+        )
+
+    def get_pending_jmail_selection(
+        self,
+        conversation_key: str,
+    ) -> PendingJmailSelectionState | None:
+        now = time.monotonic()
+        self._purge(now)
+        return self._pending_jmail_selections.get(conversation_key)
+
+    def clear_pending_jmail_selection(self, conversation_key: str) -> None:
+        self._pending_jmail_selections.pop(conversation_key, None)
+
     def _purge(self, now: float) -> None:
         expired_keys: list[str] = []
         for conversation_key, records in self._records.items():
@@ -246,6 +298,14 @@ class SearchContextStore:
         ]
         for key in pending_video_expired:
             del self._pending_video_selections[key]
+
+        pending_jmail_expired = [
+            key
+            for key, pending in self._pending_jmail_selections.items()
+            if pending.created_at + self._ttl_seconds <= now
+        ]
+        for key in pending_jmail_expired:
+            del self._pending_jmail_selections[key]
 
 
 def _claim_key(result: SearchResult) -> str:

@@ -1,0 +1,66 @@
+"""Mojeek search engine provider."""
+
+from __future__ import annotations
+
+import logging
+
+from fake_useragent import UserAgent
+from lxml import html  # type: ignore
+
+from orx_search.base import SearchResult
+from orx_search.http_client import HttpClient
+from orx_search.registry import register
+from orx_search.utils import normalize_text, normalize_url
+
+logger = logging.getLogger(__name__)
+
+
+@register
+class MojeekProvider:
+    """Mojeek text search via HTML scraping."""
+
+    name = "mojeek"
+
+    def __init__(self, proxy: str | None = None) -> None:
+        self._ua = UserAgent()
+        self._http_client = HttpClient(
+            headers={"User-Agent": self._ua.random},
+            proxy=proxy,
+        )
+
+    def search(self, query: str) -> list[SearchResult]:
+        params = {"q": query}
+
+        try:
+            resp = self._http_client.get("https://www.mojeek.com/search", params=params)
+        except Exception:
+            logger.exception("Mojeek search request failed")
+            return []
+
+        if not resp.content:
+            return []
+
+        return self._extract_results(resp.text)
+
+    def _extract_results(self, html_text: str) -> list[SearchResult]:
+        tree = html.fromstring(html_text)
+        items = tree.xpath("//ul[contains(@class, 'results')]/li")
+        results: list[SearchResult] = []
+
+        for item in items:
+            try:
+                title = normalize_text(" ".join(item.xpath(".//h2//text()")))
+                href = " ".join(item.xpath(".//h2/a/@href")).strip()
+                body = normalize_text(" ".join(item.xpath(".//p[@class='s']//text()")))
+
+                href = normalize_url(href)
+                if not href:
+                    continue
+
+                results.append(
+                    SearchResult(title=title, url=href, snippet=body, source="Mojeek")
+                )
+            except Exception:
+                continue
+
+        return results

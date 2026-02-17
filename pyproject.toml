@@ -23,11 +23,14 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
-    "ddgs @ git+https://github.com/htmlgxn/ddgs-more.git@2638d08",
+    "orx-search",
     "fastapi>=0.116.1",
     "httpx>=0.28.1",
     "uvicorn>=0.35.0",
 ]
+
+[tool.uv.sources]
+orx-search = { path = "./orx-search", editable = true }
 
 [project.scripts]
 signal-bot-orx = "signal_bot_orx.main:main"
@@ -41,10 +44,14 @@ Issues = "https://github.com/htmlgxn/signal-bot-orx/issues"
 dev = [
     "pytest>=9.0.2",
     "pytest-asyncio>=0.23.0",
-    "ruff>=0.15.0",
+    "ruff>=0.15.1",
     "tomli-w>=1.2.0",
-    "ty>=0.0.16",
+    "ty>=0.0.17",
 ]
+
+[build-system]
+requires = ["uv_build>=0.10.0,<0.11.0"]
+build-backend = "uv_build"
 
 [tool.ruff]
 line-length = 88

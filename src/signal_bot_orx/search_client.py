@@ -1,16 +1,23 @@
-from __future__ import annotations
-
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Literal, cast
+from typing import Literal
 
-from ddgs import DDGS
-from ddgs.exceptions import DDGSException, RatelimitException, TimeoutException
+import orx_search.providers  # noqa: F401
+from orx_search.registry import get_provider
 
 from signal_bot_orx.config import Settings
 
-SearchMode = Literal["search", "news", "wiki", "images", "videos"]
+SearchMode = Literal[
+    "search",
+    "news",
+    "wiki",
+    "images",
+    "videos",
+    "jmail",
+    "lolcow_cyraxx",
+    "lolcow_larson",
+]
 logger = logging.getLogger(__name__)
 
 
@@ -29,6 +36,7 @@ class SearchResult:
     source: str | None = None
     date: str | None = None
     image_url: str | None = None
+    thumbnail_url: str | None = None
 
 
 class SearchClient:
@@ -46,13 +54,10 @@ class SearchClient:
                 normalized_query,
                 settings,
             )
-        except RatelimitException as exc:
-            raise SearchError(
-                "Search service is rate-limited. Try again soon."
-            ) from exc
-        except TimeoutException as exc:
-            raise SearchError("Search service timed out. Try again.") from exc
-        except DDGSException as exc:
+        except Exception as exc:
+            if isinstance(exc, SearchError):
+                raise
+            logger.exception("Search failed")
             raise SearchError(f"Search failed: {exc}") from exc
 
     def _search_sync(
@@ -61,352 +66,107 @@ class SearchClient:
         query: str,
         settings: Settings,
     ) -> list[SearchResult]:
-        timeout = max(1, round(settings.bot_search_timeout_seconds))
-        with DDGS(timeout=timeout) as ddgs:
-            if mode == "search":
-                normalized = _search_mode_with_backends(
-                    ddgs=ddgs,
-                    query=query,
-                    settings=settings,
-                    mode="search",
-                    backends=settings.bot_search_backend_search_order,
-                    max_results=settings.bot_search_text_max_results,
-                    strategy=settings.bot_search_backend_strategy,
-                )
-                if not normalized:
-                    raise SearchError("No search results found.")
-                return normalized
-            if mode == "news":
-                normalized = _search_mode_with_backends(
-                    ddgs=ddgs,
-                    query=query,
-                    settings=settings,
-                    mode="news",
-                    backends=settings.bot_search_backend_news_order,
-                    max_results=settings.bot_search_news_max_results,
-                    strategy=settings.bot_search_backend_strategy,
-                )
-                if not normalized:
-                    raise SearchError("No search results found.")
-                return normalized
-            if mode == "wiki":
-                raw_results = ddgs.text(
-                    query,
-                    region=settings.bot_search_region,
-                    safesearch=settings.bot_search_safesearch,
-                    max_results=settings.bot_search_wiki_max_results,
-                    backend=settings.bot_search_backend_wiki,
-                )
-            elif mode == "videos":
-                raw_results = ddgs.videos(
-                    query,
-                    region=settings.bot_search_region,
-                    safesearch=settings.bot_search_safesearch,
-                    max_results=settings.bot_search_videos_max_results,
-                    backend=settings.bot_search_backend_videos,
-                )
+        # Determine providers based on mode and settings
+        provider_names: list[str] = []
+        if mode == "search":
+            provider_names = list(settings.bot_search_backend_search_order)
+        elif mode == "news":
+            provider_names = list(settings.bot_search_backend_news_order)
+        elif mode == "wiki":
+            provider_names = [settings.bot_search_backend_wiki]
+        elif mode == "images":
+            # Map legacy 'duckduckgo' to 'duckduckgo_images' if needed
+            backend = settings.bot_search_backend_images
+            if backend == "duckduckgo":
+                provider_names = ["duckduckgo_images"]
             else:
-                raw_results = ddgs.images(
-                    query,
-                    region=settings.bot_search_region,
-                    safesearch=settings.bot_search_safesearch,
-                    max_results=settings.bot_search_images_max_results,
-                    backend=settings.bot_search_backend_images,
-                )
+                provider_names = [backend]
+        elif mode == "videos":
+            backend = settings.bot_search_backend_videos
+            if backend == "duckduckgo":
+                provider_names = ["duckduckgo_videos"]
+            elif backend == "youtube":
+                provider_names = ["youtube_videos"]
+            else:
+                provider_names = [backend]
+        elif mode == "jmail":
+            provider_names = [settings.bot_search_backend_jmail]
+        elif mode == "lolcow_cyraxx":
+            provider_names = [settings.bot_search_backend_lolcow_cyraxx]
+        elif mode == "lolcow_larson":
+            provider_names = [settings.bot_search_backend_lolcow_larson]
 
-        normalized = _normalize_search_results(mode=mode, raw_results=raw_results)
+        # Flatten comma-separated strings (common in env vars)
+        final_names: list[str] = []
+        for name in provider_names:
+            if "," in name:
+                final_names.extend(s.strip() for s in name.split(",") if s.strip())
+            elif name.strip():
+                final_names.append(name.strip())
+        provider_names = final_names
 
-        if not normalized:
+        strategy = settings.bot_search_backend_strategy
+        max_results = 5
+        if mode == "search":
+            max_results = settings.bot_search_text_max_results
+        elif mode == "news":
+            max_results = settings.bot_search_news_max_results
+        elif mode == "images":
+            max_results = settings.bot_search_images_max_results
+        elif mode == "videos":
+            max_results = settings.bot_search_videos_max_results
+        elif mode == "wiki":
+            max_results = settings.bot_search_wiki_max_results
+        elif mode == "jmail":
+            max_results = settings.bot_search_jmail_max_results
+        elif mode == "lolcow_cyraxx":
+            max_results = settings.bot_search_lolcow_cyraxx_max_results
+        elif mode == "lolcow_larson":
+            max_results = settings.bot_search_lolcow_larson_max_results
+
+        all_results: list[SearchResult] = []
+        for name in provider_names:
+            try:
+                provider_cls = get_provider(name)
+                provider = provider_cls()
+
+                # Execute search
+                orx_results = provider.search(query)
+
+                # Map to bot's SearchResult
+                mapped = [
+                    SearchResult(
+                        mode=mode,
+                        title=res.title,
+                        url=res.url,
+                        snippet=res.snippet,
+                        source=res.source,
+                        date=res.date,
+                        image_url=res.image_url,
+                        thumbnail_url=res.image_url,
+                    )
+                    for res in orx_results
+                ]
+
+                if strategy == "first_non_empty":
+                    if mapped:
+                        return mapped[:max_results]
+                else:
+                    all_results.extend(mapped)
+
+            except Exception:
+                logger.warning("Provider %s failed", name, exc_info=True)
+                continue
+
+        if not all_results:
             raise SearchError("No search results found.")
 
-        return normalized
+        # Deduplicate by URL
+        seen_urls = set()
+        deduped = []
+        for res in all_results:
+            if res.url not in seen_urls:
+                deduped.append(res)
+                seen_urls.add(res.url)
 
-
-def _normalize_search_results(
-    *, mode: SearchMode, raw_results: list[dict[str, object]]
-) -> list[SearchResult]:
-    normalized = [
-        _normalize_result(mode=mode, result=item)
-        for item in raw_results
-        if isinstance(item, dict)
-    ]
-    return [item for item in normalized if item is not None]
-
-
-def _normalize_result(
-    mode: SearchMode, result: dict[str, object]
-) -> SearchResult | None:
-    if mode == "videos":
-        title = _as_non_empty(result.get("title")) or "Untitled video"
-        url = _as_non_empty(result.get("content")) or _as_non_empty(result.get("url"))
-        if url is None:
-            return None
-        snippet = (
-            _as_non_empty(result.get("description"))
-            or _as_non_empty(result.get("body"))
-            or _as_non_empty(result.get("content"))
-            or ""
-        )
-        source = _as_non_empty(result.get("publisher")) or _as_non_empty(
-            result.get("source")
-        )
-        return SearchResult(
-            mode=mode,
-            title=title,
-            url=url,
-            snippet=snippet,
-            source=source,
-            date=_as_non_empty(result.get("published")),
-            image_url=_extract_video_thumbnail_url(result),
-        )
-
-    if mode == "images":
-        title = _as_non_empty(result.get("title")) or "Untitled image"
-        image_url = _as_non_empty(result.get("image"))
-        source_url = _as_non_empty(result.get("url"))
-        url = image_url or source_url
-        if url is None:
-            return None
-        snippet = _as_non_empty(result.get("source")) or ""
-        source = _as_non_empty(result.get("source"))
-        return SearchResult(
-            mode=mode,
-            title=title,
-            url=url,
-            snippet=snippet,
-            source=source,
-            image_url=image_url,
-        )
-
-    title = _as_non_empty(result.get("title")) or "Untitled"
-    snippet = (
-        _as_non_empty(result.get("body")) or _as_non_empty(result.get("content")) or ""
-    )
-    url = _as_non_empty(result.get("href")) or _as_non_empty(result.get("url"))
-    if url is None:
-        return None
-
-    return SearchResult(
-        mode=mode,
-        title=title,
-        url=url,
-        snippet=snippet,
-        source=_as_non_empty(result.get("source")),
-        date=_as_non_empty(result.get("date")),
-        image_url=_as_non_empty(result.get("image")),
-    )
-
-
-def _as_non_empty(value: object) -> str | None:
-    if isinstance(value, str):
-        stripped = value.strip()
-        if stripped:
-            return stripped
-    return None
-
-
-def _as_http_url(value: object) -> str | None:
-    candidate = _as_non_empty(value)
-    if candidate is None:
-        return None
-    if candidate.startswith(("http://", "https://")):
-        return candidate
-    return None
-
-
-def _extract_video_thumbnail_url(result: dict[str, object]) -> str | None:
-    images_value = result.get("images")
-    if isinstance(images_value, dict):
-        image_map = cast(dict[object, object], images_value)
-        preferred = _as_http_url(image_map.get("0"))
-        if preferred is not None:
-            return preferred
-        alternate = _as_http_url(image_map.get(0))
-        if alternate is not None:
-            return alternate
-        fallback = _as_http_url(image_map.get("1")) or _as_http_url(image_map.get(1))
-        if fallback is not None:
-            return fallback
-
-    if isinstance(images_value, (list, tuple)) and images_value:
-        preferred = _as_http_url(images_value[0])
-        if preferred is not None:
-            return preferred
-
-    return (
-        _as_http_url(result.get("thumbnail"))
-        or _as_http_url(result.get("thumbnail_url"))
-        or _as_http_url(result.get("image"))
-    )
-
-
-def _search_mode_with_backends(
-    *,
-    ddgs: DDGS,
-    query: str,
-    settings: Settings,
-    mode: Literal["search", "news"],
-    backends: tuple[str, ...],
-    max_results: int,
-    strategy: Literal["first_non_empty", "aggregate"],
-) -> list[SearchResult]:
-    last_exception: Exception | None = None
-    attempts = tuple(_dedupe_backends(backends))
-    _debug_log(
-        settings=settings,
-        event="search_backend_chain",
-        mode=mode,
-        backend_count=len(attempts),
-        strategy=strategy,
-    )
-
-    aggregate_results: list[SearchResult] = []
-    if strategy == "aggregate":
-        _debug_log(
-            settings=settings,
-            event="search_backend_aggregate_begin",
-            mode=mode,
-            backend_count=len(attempts),
-        )
-
-    for backend in attempts:
-        try:
-            raw_results = _run_backend_search(
-                ddgs=ddgs,
-                mode=mode,
-                query=query,
-                settings=settings,
-                backend=backend,
-                max_results=max_results,
-            )
-        except (DDGSException, TimeoutException, RatelimitException) as exc:
-            last_exception = exc
-            _debug_log(
-                settings=settings,
-                event="search_backend_attempt",
-                mode=mode,
-                backend=backend,
-                status="error",
-                reason_code=exc.__class__.__name__,
-            )
-            continue
-
-        normalized_raw_results = _normalize_raw_results(raw_results)
-        normalized = _normalize_search_results(
-            mode=mode, raw_results=normalized_raw_results
-        )
-        _debug_log(
-            settings=settings,
-            event="search_backend_attempt",
-            mode=mode,
-            backend=backend,
-            status="ok" if normalized else "empty",
-            result_count=len(normalized),
-        )
-        if strategy == "first_non_empty":
-            if normalized:
-                return normalized
-            continue
-
-        aggregate_results.extend(normalized)
-
-    if strategy == "aggregate":
-        deduped = _dedupe_search_results(aggregate_results)
-        capped = deduped[: max(1, max_results)]
-        _debug_log(
-            settings=settings,
-            event="search_backend_aggregate_complete",
-            mode=mode,
-            merged_count=len(aggregate_results),
-            deduped_count=len(deduped),
-            returned_count=len(capped),
-        )
-        if capped:
-            return capped
-
-    _debug_log(
-        settings=settings,
-        event="search_backend_exhausted",
-        mode=mode,
-        backend_count=len(attempts),
-        strategy=strategy,
-        reason_code=(
-            last_exception.__class__.__name__ if last_exception is not None else "empty"
-        ),
-    )
-    if last_exception is not None:
-        raise last_exception
-    return []
-
-
-def _run_backend_search(
-    *,
-    ddgs: DDGS,
-    mode: Literal["search", "news"],
-    query: str,
-    settings: Settings,
-    backend: str,
-    max_results: int,
-) -> list[dict[str, object]]:
-    if mode == "search":
-        return ddgs.text(
-            query,
-            region=settings.bot_search_region,
-            safesearch=settings.bot_search_safesearch,
-            max_results=max_results,
-            backend=backend,
-        )
-    return ddgs.news(
-        query,
-        region=settings.bot_search_region,
-        safesearch=settings.bot_search_safesearch,
-        max_results=max_results,
-        backend=backend,
-    )
-
-
-def _normalize_raw_results(raw_results: object) -> list[dict[str, object]]:
-    if not isinstance(raw_results, list):
-        return []
-    cleaned: list[dict[str, object]] = []
-    for item in raw_results:
-        if isinstance(item, dict):
-            cleaned.append(cast(dict[str, object], item))
-    return cleaned
-
-
-def _dedupe_search_results(results: list[SearchResult]) -> list[SearchResult]:
-    deduped: list[SearchResult] = []
-    seen_urls: set[str] = set()
-    for result in results:
-        key = result.url.strip()
-        if not key or key in seen_urls:
-            continue
-        deduped.append(result)
-        seen_urls.add(key)
-    return deduped
-
-
-def _dedupe_backends(backends: tuple[str, ...]) -> tuple[str, ...]:
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for backend in backends:
-        normalized = backend.strip().lower()
-        if not normalized or normalized in seen:
-            continue
-        ordered.append(normalized)
-        seen.add(normalized)
-    return tuple(ordered)
-
-
-def _debug_log(settings: Settings, event: str, **fields: object) -> None:
-    if not settings.bot_search_debug_logging:
-        return
-    logger.info(
-        "search_backend_debug event=%s %s",
-        event,
-        " ".join(
-            f"{key}={str(value).replace('\n', ' ').strip() or '-'}"
-            for key, value in sorted(fields.items())
-        ),
-    )
+        return deduped[:max_results]
