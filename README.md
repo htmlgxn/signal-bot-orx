@@ -1,5 +1,9 @@
 # signal-bot-orx
 
+<p align="center">
+  <img src="assets/logo.png" alt="signal-bot-orx" width="600">
+</p>
+
 `signal-bot-orx` is a webhook-driven Signal bot powered by
 `signal-cli-rest-api` and OpenRouter. 
 It is designed for group chats and direct messages.
