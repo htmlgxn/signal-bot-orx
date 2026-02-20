@@ -7,7 +7,7 @@ from secrets import token_urlsafe
 from urllib.parse import unquote_plus
 
 from fake_useragent import UserAgent
-from lxml import html  # type: ignore
+from lxml import html
 
 from orx_search.base import SearchResult
 from orx_search.http_client import HttpClient

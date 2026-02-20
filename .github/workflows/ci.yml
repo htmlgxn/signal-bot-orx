@@ -3,7 +3,25 @@ name: CI
 on:
   push:
     branches: [main]
+    paths:
+      - ".github/workflows/ci.yml"
+      - "src/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "docs/**"
   pull_request:
+    paths:
+      - ".github/workflows/ci.yml"
+      - "src/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "docs/**"
 
 jobs:
   checks:
@@ -21,14 +39,17 @@ jobs:
       - name: Install dependencies
         run: uv sync --dev
 
+      - name: Ruff format
+        run: uv run ruff format --check .
+
       - name: Ruff
-        run: uv run ruff check .
+        run: uv run ruff check src tests
 
       - name: Ty
-        run: uv run ty check .
+        run: uv run ty check src tests
 
       - name: Pytest
-        run: uv run pytest
+        run: uv run pytest -q tests
 
       - name: Build
         run: uv build

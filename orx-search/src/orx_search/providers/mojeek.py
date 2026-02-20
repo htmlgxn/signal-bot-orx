@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 
 from fake_useragent import UserAgent
-from lxml import html  # type: ignore
+from lxml import html
 
 from orx_search.base import SearchResult
 from orx_search.http_client import HttpClient

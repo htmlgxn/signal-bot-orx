@@ -29,10 +29,10 @@ from signal_bot_orx.webhook import (
     WebhookHandler,
     normalize_chat_prompt,
     parse_imagine_prompt,
+    parse_numeric_selection,
     parse_search_command,
     parse_source_command,
     parse_source_request_text,
-    parse_video_selection_number,
     resolve_reply_target,
     should_handle_chat_mention,
 )
@@ -62,12 +62,12 @@ def test_parse_search_command() -> None:
     assert parse_search_command("hello world") is None
 
 
-def test_parse_video_selection_number() -> None:
-    assert parse_video_selection_number("1") == 1
-    assert parse_video_selection_number(" 12 ") == 12
-    assert parse_video_selection_number("0") is None
-    assert parse_video_selection_number("abc") is None
-    assert parse_video_selection_number("/pick 1") is None
+def test_parse_numeric_selection() -> None:
+    assert parse_numeric_selection("1") == 1
+    assert parse_numeric_selection(" 12 ") == 12
+    assert parse_numeric_selection("0") is None
+    assert parse_numeric_selection("abc") is None
+    assert parse_numeric_selection("/pick 1") is None
 
 
 def test_parse_source_command() -> None:
@@ -481,6 +481,7 @@ class _FakeSearchService:
         self.video_list_calls: list[str] = []
         self.video_selection_calls: list[int] = []
         self.pending_video: dict[str, bool] = {}
+        self.pending_jmail: dict[str, bool] = {}
         self.source_calls: list[str] = []
 
     async def decide_auto_search(self, prompt: str) -> SearchRouteDecision:
@@ -644,6 +645,18 @@ class _FakeSearchService:
 
     def clear_pending_video_selection_state(self, *, conversation_key: str) -> None:
         self.pending_video.pop(conversation_key, None)
+
+    def get_pending_jmail_selection_state(
+        self,
+        *,
+        conversation_key: str,
+    ) -> object | None:
+        if self.pending_jmail.get(conversation_key):
+            return {"conversation_key": conversation_key}
+        return None
+
+    def clear_pending_jmail_selection_state(self, *, conversation_key: str) -> None:
+        self.pending_jmail.pop(conversation_key, None)
 
     def source_reply(self, *, conversation_key: str, claim: str) -> str:
         del conversation_key

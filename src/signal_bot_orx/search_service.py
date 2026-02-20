@@ -768,7 +768,7 @@ class SearchService:
                 continue
             try:
                 response = await self._http_client.get(image_url, timeout=timeout)
-            except (httpx.TimeoutException, httpx.NetworkError):
+            except httpx.TimeoutException, httpx.NetworkError:
                 continue
 
             if response.status_code >= 400 or not response.content:
@@ -896,7 +896,7 @@ class SearchService:
             results=[search_result],
         )
 
-        summary = await self._summarize_results(
+        return await self._summarize_results(
             query=pending.query,
             mode="jmail",
             results=[search_result],
@@ -904,7 +904,6 @@ class SearchService:
             history_context=history_context,
             custom_prompt=_JMAIL_SUMMARY_SYSTEM_PROMPT,
         )
-        return summary
 
     def source_reply(self, *, conversation_key: str, claim: str) -> str:
         matches = self._search_context.find_sources(

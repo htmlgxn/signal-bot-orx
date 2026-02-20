@@ -6,7 +6,7 @@ import json
 import logging
 import re
 from collections.abc import Generator, Mapping
-from typing import Any
+from typing import Any, cast
 
 from orx_search.base import SearchResult
 from orx_search.http_client import HttpClient
@@ -17,18 +17,34 @@ logger = logging.getLogger(__name__)
 _YT_INITIAL_DATA_RE = re.compile(r"ytInitialData\s*=\s*(\{.*?\});", re.DOTALL)
 
 
+def _as_string_mapping(value: object) -> Mapping[str, object] | None:
+    if not isinstance(value, Mapping):
+        return None
+    if not all(isinstance(k, str) for k in value):
+        return None
+    return cast(Mapping[str, object], value)
+
+
 def _pick_text(value: object) -> str:
     """Extract text from YouTube's nested text objects."""
     if isinstance(value, str):
         return value
-    if isinstance(value, dict):
-        if isinstance(value.get("simpleText"), str):
-            return value["simpleText"]
-        runs = value.get("runs")
+    text_map = _as_string_mapping(value)
+    if text_map is not None:
+        simple_text = text_map.get("simpleText")
+        if isinstance(simple_text, str):
+            return simple_text
+        runs = text_map.get("runs")
         if isinstance(runs, list):
-            return "".join(
-                run.get("text", "") for run in runs if isinstance(run, dict)
-            ).strip()
+            text_parts: list[str] = []
+            for run in runs:
+                run_map = _as_string_mapping(run)
+                if run_map is None:
+                    continue
+                text_value = run_map.get("text", "")
+                if isinstance(text_value, str):
+                    text_parts.append(text_value)
+            return "".join(text_parts).strip()
     return ""
 
 
@@ -46,11 +62,12 @@ def _extract_yt_initial_data(html_text: str) -> dict[str, Any]:
 
 def _iter_video_renderers(obj: object) -> Generator[dict[str, Any]]:
     """Recursively find videoRenderer objects in YouTube data."""
-    if isinstance(obj, Mapping):
-        video_renderer = obj.get("videoRenderer")
-        if isinstance(video_renderer, Mapping):
+    obj_map = _as_string_mapping(obj)
+    if obj_map is not None:
+        video_renderer = _as_string_mapping(obj_map.get("videoRenderer"))
+        if video_renderer is not None:
             yield dict(video_renderer)
-        for value in obj.values():
+        for value in obj_map.values():
             yield from _iter_video_renderers(value)
     elif isinstance(obj, list):
         for value in obj:

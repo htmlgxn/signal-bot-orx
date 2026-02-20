@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import httpx
 
 
@@ -11,7 +13,7 @@ def test_thread_page(thread_id):
         print(f"Status: {resp.status_code}")
         print(f"Content length: {len(resp.content)}")
 
-        with open("thread_output.html", "w") as f:
+        with Path("thread_output.html").open("w") as f:
             f.write(resp.text)
 
         # Check for common email body markers

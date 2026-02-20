@@ -4,7 +4,7 @@ import logging
 import ssl
 from random import SystemRandom
 from types import TracebackType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import h2.settings
 import httpcore
@@ -50,13 +50,11 @@ class HttpClient:
         verify: bool | str = True,
         http2: bool = True,
     ) -> None:
-        self._init_args = {
-            "headers": headers,
-            "proxy": proxy,
-            "timeout": timeout,
-            "verify": verify,
-            "http2": http2,
-        }
+        self._headers = headers
+        self._proxy = proxy
+        self._timeout = timeout
+        self._verify = verify
+        self._http2 = http2
         self.client = httpx.Client(
             headers=headers,
             proxy=proxy,
@@ -80,19 +78,19 @@ class HttpClient:
                 )
         except Exception as ex:
             # Fallback to HTTP/1.1 if H2 fails with common protocol errors
-            if self._init_args["http2"] and (
+            if self._http2 and (
                 "HPACK" in str(ex)
                 or "ProtocolError" in str(ex)
                 or "table size" in str(ex)
             ):
                 logger.warning(f"H2 protocol error for {url}, falling back to HTTP/1.1")
-                self._init_args["http2"] = False
+                self._http2 = False
                 self.client.close()
                 self.client = httpx.Client(
-                    headers=self._init_args["headers"],  # type: ignore
-                    proxy=self._init_args["proxy"],  # type: ignore
-                    timeout=self._init_args["timeout"],  # type: ignore
-                    verify=self._init_args["verify"],  # type: ignore
+                    headers=self._headers,
+                    proxy=self._proxy,
+                    timeout=self._timeout,
+                    verify=self._verify,
                     follow_redirects=True,
                     http2=False,
                 )
@@ -122,13 +120,11 @@ class AsyncHttpClient:
         verify: bool | str = True,
         http2: bool = True,
     ) -> None:
-        self._init_args = {
-            "headers": headers,
-            "proxy": proxy,
-            "timeout": timeout,
-            "verify": verify,
-            "http2": http2,
-        }
+        self._headers = headers
+        self._proxy = proxy
+        self._timeout = timeout
+        self._verify = verify
+        self._http2 = http2
         self.client = httpx.AsyncClient(
             headers=headers,
             proxy=proxy,
@@ -152,7 +148,7 @@ class AsyncHttpClient:
                 )
         except Exception as ex:
             # Fallback to HTTP/1.1 if H2 fails with common protocol errors
-            if self._init_args["http2"] and (
+            if self._http2 and (
                 "HPACK" in str(ex)
                 or "ProtocolError" in str(ex)
                 or "table size" in str(ex)
@@ -160,13 +156,13 @@ class AsyncHttpClient:
                 logger.warning(
                     f"Async H2 protocol error for {url}, falling back to HTTP/1.1"
                 )
-                self._init_args["http2"] = False
+                self._http2 = False
                 await self.client.aclose()
                 self.client = httpx.AsyncClient(
-                    headers=self._init_args["headers"],  # type: ignore
-                    proxy=self._init_args["proxy"],  # type: ignore
-                    timeout=self._init_args["timeout"],  # type: ignore
-                    verify=self._init_args["verify"],  # type: ignore
+                    headers=self._headers,
+                    proxy=self._proxy,
+                    timeout=self._timeout,
+                    verify=self._verify,
                     follow_redirects=True,
                     http2=False,
                 )
@@ -252,6 +248,10 @@ def _get_random_ssl_context(*, verify: bool | str) -> ssl.SSLContext:
 class Patch:
     """Patch the HTTP2Connection._send_connection_init method."""
 
+    def __init__(self) -> None:
+        self._connection_cls: Any | None = None
+        self.original_send_connection_init: Any | None = None
+
     def __enter__(self) -> None:
         def _send_connection_init(self: Any, request: Any) -> None:
             self._h2_state.local_settings = h2.settings.Settings(
@@ -280,14 +280,12 @@ class Patch:
             )
             self._h2_state.initiate_connection()
             self._h2_state.increment_flow_control_window(2**24)
-            self._write_outgoing_data(request)  # type: ignore
+            self._write_outgoing_data(request)
 
-        self.original_send_connection_init = (
-            httpcore._sync.http2.HTTP2Connection._send_connection_init
-        )  # type: ignore
-        httpcore._sync.http2.HTTP2Connection._send_connection_init = (
-            _send_connection_init  # type: ignore
-        )
+        sync_mod = cast(Any, httpcore._sync)
+        self._connection_cls = cast(Any, sync_mod.http2.HTTP2Connection)
+        self.original_send_connection_init = self._connection_cls._send_connection_init
+        self._connection_cls._send_connection_init = _send_connection_init
 
     def __exit__(
         self,
@@ -295,16 +293,21 @@ class Patch:
         exc_val: BaseException | None = None,
         exc_tb: TracebackType | None = None,
     ) -> None:
-        httpcore._sync.http2.HTTP2Connection._send_connection_init = (
-            self.original_send_connection_init
-        )  # type: ignore
+        if self._connection_cls is not None and self.original_send_connection_init:
+            self._connection_cls._send_connection_init = (
+                self.original_send_connection_init
+            )
 
 
 class AsyncPatch:
     """Patch the AsyncHTTP2Connection._send_connection_init method."""
 
+    def __init__(self) -> None:
+        self._connection_cls: Any | None = None
+        self.original_send_connection_init: Any | None = None
+
     async def __aenter__(self) -> None:
-        def _send_connection_init(self: Any, request: Any) -> None:
+        async def _send_connection_init(self: Any, request: Any) -> None:
             self._h2_state.local_settings = h2.settings.Settings(
                 client=True,
                 initial_values={
@@ -331,14 +334,12 @@ class AsyncPatch:
             )
             self._h2_state.initiate_connection()
             self._h2_state.increment_flow_control_window(2**24)
-            self._write_outgoing_data(request)  # type: ignore
+            self._write_outgoing_data(request)
 
-        self.original_send_connection_init = (
-            httpcore._async.http2.AsyncHTTP2Connection._send_connection_init
-        )  # type: ignore
-        httpcore._async.http2.AsyncHTTP2Connection._send_connection_init = (
-            _send_connection_init  # type: ignore
-        )
+        async_mod = cast(Any, httpcore._async)
+        self._connection_cls = cast(Any, async_mod.http2.AsyncHTTP2Connection)
+        self.original_send_connection_init = self._connection_cls._send_connection_init
+        self._connection_cls._send_connection_init = _send_connection_init
 
     async def __aexit__(
         self,
@@ -346,6 +347,7 @@ class AsyncPatch:
         exc_val: BaseException | None = None,
         exc_tb: TracebackType | None = None,
     ) -> None:
-        httpcore._async.http2.AsyncHTTP2Connection._send_connection_init = (
-            self.original_send_connection_init
-        )  # type: ignore
+        if self._connection_cls is not None and self.original_send_connection_init:
+            self._connection_cls._send_connection_init = (
+                self.original_send_connection_init
+            )

@@ -2,9 +2,9 @@ import logging
 import os
 from typing import Any, cast
 
-import typer  # type: ignore
-from rich.console import Console  # type: ignore
-from rich.table import Table  # type: ignore
+import typer
+from rich.console import Console
+from rich.table import Table
 
 # Ensure providers are registered
 import orx_search.providers  # noqa: F401

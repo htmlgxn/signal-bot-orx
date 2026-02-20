@@ -10,6 +10,10 @@ from orx_search.registry import register
 logger = logging.getLogger(__name__)
 
 
+def _raise_http_error(status_code: int) -> None:
+    raise RuntimeError(f"HTTP error {status_code}")
+
+
 @register
 class WeatherProvider:
     name = "weather"
@@ -68,7 +72,7 @@ class WeatherProvider:
             client = self._get_async_client()
             resp = await client.get(url, params=params)
             if resp.status_code >= 400:
-                raise RuntimeError(f"HTTP error {resp.status_code}")
+                _raise_http_error(resp.status_code)
 
             import json
 
@@ -86,7 +90,7 @@ class WeatherProvider:
             client = self._get_async_client()
             resp = await client.get(url, params=params)
             if resp.status_code >= 400:
-                raise RuntimeError(f"HTTP error {resp.status_code}")
+                _raise_http_error(resp.status_code)
 
             import json
 
@@ -144,16 +148,14 @@ class WeatherProvider:
                 daily[date_key] = entry
 
         lines = []
-        count = 0
-        for date_str, entry in sorted(daily.items()):
-            if count >= 5:
+        for count, (date_str, entry) in enumerate(sorted(daily.items()), start=1):
+            if count > 5:
                 break
             weather = entry["weather"][0]["description"].capitalize()
             temp = entry["main"]["temp"]
             lines.append(
                 f"{date_str}: {weather}, {temp}°{'C' if self._units == 'metric' else 'F'}"
             )
-            count += 1
 
         return SearchResult(
             title=f"5-day forecast for {city}, {country}",

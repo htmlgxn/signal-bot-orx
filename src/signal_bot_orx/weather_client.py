@@ -78,7 +78,7 @@ def _format_current(data: dict, units: str) -> str:
         feels = data["main"].get("feels_like")
         humidity = data["main"].get("humidity")
         wind = data["wind"].get("speed")
-    except (KeyError, IndexError, TypeError):
+    except KeyError, IndexError, TypeError:
         return "Could not parse weather data."
     lines = [
         f"Weather for {city}, {country}:",
@@ -99,7 +99,7 @@ def _format_forecast(data: dict, units: str) -> str:
         city = data["city"]["name"]
         country = data["city"].get("country", "")
         entries = data["list"]
-    except (KeyError, TypeError):
+    except KeyError, TypeError:
         return "Could not parse forecast data."
     # Group by date
     daily: dict[str, dict] = {}
@@ -126,6 +126,6 @@ def _format_forecast(data: dict, units: str) -> str:
                 f"{date_str}: {weather}, {temp}°{'C' if units == 'metric' else 'F'}"
             )
             count += 1
-        except (KeyError, IndexError, TypeError):
+        except KeyError, IndexError, TypeError:
             continue
     return "\n".join(lines)
